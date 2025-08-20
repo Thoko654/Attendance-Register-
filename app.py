@@ -1,76 +1,60 @@
 import streamlit as st
 import pandas as pd
+import os
 from datetime import datetime
 
-# ====================================================
-# CONFIGURATION
-# ====================================================
-CSV_FILE = "Attendance Tracker/Student_Attendance.csv"  # Ensure this path is correct
+# -----------------------------
+# Config
+# -----------------------------
+st.set_page_config(page_title="Tutor Class Attendance Register 2025", layout="wide")
+CSV_FILE = "attendance.csv"
 
-# ====================================================
-# DATA LOADING
-# ====================================================
+# -----------------------------
+# Load Data
+# -----------------------------
 @st.cache_data
 def load_data():
-    return pd.read_csv(CSV_FILE)
+    if os.path.exists(CSV_FILE):
+        return pd.read_csv(CSV_FILE)
+    else:
+        return pd.DataFrame()
 
-# ====================================================
-# SAVE CHANGES
-# ====================================================
 def save_data(df):
     df.to_csv(CSV_FILE, index=False)
 
-# ====================================================
-# APP LAYOUT
-# ====================================================
-st.set_page_config("📋 Tutor Class Attendance Register 2025", layout="wide")
+# -----------------------------
+# UI: Upload Attendance CSV
+# -----------------------------
 st.title("📋 Tutor Class Attendance Register 2025")
 
-df = load_data()
+uploaded_file = st.file_uploader("📁 Upload attendance register CSV file", type=["csv"])
 
-# ====================================================
-# 📆 Today's Date
-# ====================================================
-today = datetime.now().strftime('%-d-%b')  # e.g., '20-Aug'
-if today not in df.columns:
-    df[today] = ""
+if uploaded_file:
+    df = pd.read_csv(uploaded_file)
+    save_data(df)
+    st.success("✅ File uploaded and loaded successfully!")
+else:
+    df = load_data()
+    if df.empty:
+        st.warning("⚠️ No attendance file found. Please upload a CSV file to proceed.")
 
-# ====================================================
-# 🎯 Barcode Scanner Input
-# ====================================================
-st.subheader("📷 Scan Student Barcode")
-barcode = st.text_input("Scan or enter student barcode", max_chars=10)
+# -----------------------------
+# Show Data
+# -----------------------------
+if not df.empty:
+    st.subheader("📊 Attendance Data")
+    st.dataframe(df)
 
-if barcode:
-    if barcode in df['Barcode'].astype(str).values:
-        idx = df[df['Barcode'].astype(str) == barcode].index[0]
-        df.at[idx, today] = "1"  # Mark as present
-        save_data(df)
-        st.success(f"✅ Marked Present: {df.at[idx, 'Name']} {df.at[idx, 'Surname']}")
-    else:
-        st.error("❌ Barcode not found in records.")
+    # Example summary stats
+    if 'Name' in df.columns:
+        st.markdown(f"**👨‍🎓 Total Students:** {df['Name'].nunique()}")
 
-# ====================================================
-# 🖊️ Manual Editing
-# ====================================================
-st.subheader("📅 Manual Attendance Edit")
-edited_df = st.data_editor(df, use_container_width=True, num_rows="dynamic")
-if st.button("💾 Save Manual Changes"):
-    save_data(edited_df)
-    st.success("✅ Changes saved!")
-
-# ====================================================
-# 📊 Attendance Summary
-# ====================================================
-st.subheader("📊 Attendance Summary")
-
-def calculate_attendance(df):
-    attendance_cols = df.columns[8:]  # Assuming first 8 columns are metadata
-    df["Days Present"] = df[attendance_cols].apply(lambda row: (row == "1").sum(), axis=1)
-    df["Total Days"] = len(attendance_cols)
-    df["% Attendance"] = (df["Days Present"] / df["Total Days"] * 100).round(1)
-    return df[["Name", "Surname", "Grade", "Area", "Days Present", "Total Days", "% Attendance"]]
-
-summary_df = calculate_attendance(df)
-st.dataframe(summary_df)
+# -----------------------------
+# Placeholder for additional features
+# -----------------------------
+    st.subheader("📌 More Features Coming Soon!")
+    st.markdown("- Automatic attendance marking via barcode")
+    st.markdown("- Per-grade monthly attendance %")
+    st.markdown("- Edit attendance history")
+    st.markdown("- Check 70% threshold compliance")
 
