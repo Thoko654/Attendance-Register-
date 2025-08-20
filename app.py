@@ -3,112 +3,52 @@ import pandas as pd
 from datetime import datetime
 import os
 
-# =========================
-# Config & Constants
-# =========================
-st.set_page_config(page_title="📸 Student Attendance Register", layout="centered")
-STUDENT_FILE = "Student_records.csv"
-ATTENDANCE_FILE = "Attendance_log.csv"
-TODAY = datetime.today().strftime('%Y-%m-%d')
+# ========= Config =========
+FILE_PATH = "C:/Users/tcsa0/OneDrive/Documents/Attendance Tracker/Attendance.csv"
+st.set_page_config(page_title="Tutor Class Attendance Register 2025", layout="wide")
 
-# =========================
-# Load Student Records
-# =========================
-def load_students():
-    if os.path.exists(STUDENT_FILE):
-        return pd.read_csv(STUDENT_FILE, dtype=str)
+# ========= Load Data =========
+@st.cache_data(show_spinner=False)
+def load_data():
+    return pd.read_csv(FILE_PATH)
+
+def save_data(df):
+    df.to_csv(FILE_PATH, index=False)
+
+df = load_data()
+
+# ========= Today's Date Column =========
+today = datetime.today().strftime('%-d-%b')  # e.g., 20-Aug
+if today not in df.columns:
+    df[today] = ""
+
+# ========= Title =========
+st.title("📚 Tutor Class Attendance Register 2025")
+
+# ========= Barcode Scanner =========
+st.subheader("📷 Scan Student Barcode")
+barcode_input = st.text_input("Scan barcode here")
+
+if barcode_input:
+    if barcode_input in df["Barcode"].astype(str).values:
+        idx = df[df["Barcode"].astype(str) == barcode_input].index[0]
+        df.at[idx, today] = 1
+        save_data(df)
+        st.success(f"✅ Attendance marked for: {df.at[idx, 'Name']} {df.at[idx, 'Surname']}")
     else:
-        st.error(f"❌ File '{STUDENT_FILE}' not found.")
-        return pd.DataFrame()
+        st.error("❌ Barcode not found!")
 
-def save_attendance_log(df):
-    df.to_csv(ATTENDANCE_FILE, index=False)
+# ========= Editable Table =========
+st.subheader("📝 Edit Attendance Table")
+edited_df = st.data_editor(
+    df,
+    num_rows="dynamic",
+    use_container_width=True,
+    key="editable_table"
+)
 
-# =========================
-# Attendance Logging
-# =========================
-def mark_attendance(student_id):
-    if student_id not in students['Student ID'].values:
-        st.warning("⚠️ Student not found!")
-        return
-    
-    name = students.loc[students['Student ID'] == student_id, 'Name'].values[0]
-    grade = students.loc[students['Student ID'] == student_id, 'Grade'].values[0]
-    
-    # Check if already marked today
-    if not attendance_df[(attendance_df['Student ID'] == student_id) & (attendance_df['Date'] == TODAY)].empty:
-        st.info("✅ Already marked present today.")
-    else:
-        new_row = pd.DataFrame([{
-            'Student ID': student_id,
-            'Name': name,
-            'Grade': grade,
-            'Date': TODAY,
-            'Status': 'Present'
-        }])
-        updated_df = pd.concat([attendance_df, new_row], ignore_index=True)
-        save_attendance_log(updated_df)
-        st.success(f"🟢 {name} marked present!")
-
-# =========================
-# Load Attendance Log
-# =========================
-def load_attendance_log():
-    if os.path.exists(ATTENDANCE_FILE):
-        return pd.read_csv(ATTENDANCE_FILE, dtype=str)
-    else:
-        return pd.DataFrame(columns=['Student ID', 'Name', 'Grade', 'Date', 'Status'])
-
-# =========================
-# Calculate Attendance Summary
-# =========================
-def calculate_summary():
-    df = attendance_df.copy()
-    df['Date'] = pd.to_datetime(df['Date'])
-    df = df[df['Status'] == 'Present']
-
-    # Monthly Attendance per student
-    this_month = df[df['Date'].dt.strftime('%Y-%m') == datetime.today().strftime('%Y-%m')]
-    student_summary = this_month.groupby(['Student ID', 'Name', 'Grade']).size().reset_index(name='Days Present')
-    student_summary['Attendance %'] = (student_summary['Days Present'] / df['Date'].dt.day.max()) * 100
-
-    # Grade attendance
-    grade_summary = student_summary.groupby('Grade').agg({'Student ID': 'count', 'Days Present': 'sum'}).reset_index()
-    grade_summary['Attendance %'] = (grade_summary['Days Present'] / (20 * df['Date'].dt.day.max())) * 100
-
-    return student_summary, grade_summary
-
-# =========================
-# App UI
-# =========================
-st.title("📸 Student Attendance Register")
-
-students = load_students()
-attendance_df = load_attendance_log()
-
-st.subheader("✨ Scan or Enter Barcode Below")
-barcode = st.text_input("📷 Scan/Enter Student Barcode", key="barcode_input")
-
-if barcode:
-    mark_attendance(barcode.strip())
-    st.experimental_rerun()
-
-with st.expander("📊 Show Full Attendance Table"):
-    st.dataframe(attendance_df.sort_values(by="Date", ascending=False), use_container_width=True)
-
-# =========================
-# Attendance Summary
-# =========================
-st.subheader("📈 Attendance Analytics")
-
-if not attendance_df.empty:
-    student_summary, grade_summary = calculate_summary()
-    
-    st.markdown("#### 👨‍🎓 Monthly Attendance per Student")
-    st.dataframe(student_summary, use_container_width=True)
-
-    st.markdown("#### 🏫 Grade-wise Attendance Percentage")
-    st.dataframe(grade_summary, use_container_width=True)
-else:
-    st.info("📌 No attendance data available yet.")
+# ========= Save Button =========
+if st.button("💾 Save Changes"):
+    save_data(edited_df)
+    st.success("✅ Changes saved successfully!")
 
