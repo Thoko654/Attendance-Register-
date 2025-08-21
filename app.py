@@ -1,121 +1,139 @@
 import streamlit as st
 import pandas as pd
 import datetime
+import os
 
-# ---------- CONFIG ---------- #
-DATA_FILE = "attendance_clean.csv"
-GRADE_BENCHMARK = 20
-MIN_ATTENDANCE_PERCENT = 70
+CSV_PATH = "AttendanceRegister.csv"
 
-# ---------- LOAD / SAVE ---------- #
-@st.cache_data
+# Load and preprocess CSV
+@st.cache_data(ttl=60)
 def load_data():
-    return pd.read_csv(DATA_FILE)
-
-def save_data(df):
-    df.to_csv(DATA_FILE, index=False)
-
-# ---------- SCAN LOGIC ---------- #
-def mark_attendance(df, student_name):
-    today = datetime.date.today().strftime("%-d-%b")
-    if today not in df.columns:
-        df[today] = ""
-    df.loc[df["Name"] == student_name, today] = "Present"
+    df = pd.read_csv(CSV_PATH)
+    df["Barcode"] = df["Barcode"].apply(lambda x: f"{int(x):04d}")
     return df
 
-# ---------- SIDEBAR ---------- #
-st.sidebar.title("Select Page")
-page = st.sidebar.radio("Select Page", ["Scan", "Today", "History", "Tracking", "Manage"])
+def save_data(df):
+    df.to_csv(CSV_PATH, index=False)
 
-# ---------- PAGE: SCAN ---------- #
-if page == "Scan":
-    st.title("📷 Scan Barcode")
-    st.write("Scan student barcode to mark them present.")
-    df = load_data()
-    name = st.text_input("Scan Barcode or Enter Name")
-    if name and name in df["Name"].values:
-        df = mark_attendance(df, name)
-        save_data(df)
-        st.success(f"{name} marked present.")
-    elif name:
-        st.error("Student not found.")
+def format_attendance(val):
+    if pd.isna(val):
+        return "—"
+    elif str(val).strip() == "1":
+        return "✅"
+    elif str(val).strip() == "0":
+        return "❌"
+    return str(val)
 
-# ---------- PAGE: TODAY ---------- #
-elif page == "Today":
-    st.title("📅 Today's Attendance")
-    df = load_data()
-    today = datetime.date.today().strftime("%-d-%b")
-    if today not in df.columns:
-        st.warning("No attendance marked today.")
-    else:
-        present_df = df[df[today] == "Present"]
-        st.write(f"✅ Total Present: {len(present_df)}")
-        st.dataframe(present_df[["Name", "Surname", "Grade"]])
+# App title
+st.title("📘 Tutor Class Attendance Register 2025")
 
-# ---------- PAGE: HISTORY ---------- #
-elif page == "History":
-    st.title("📚 Attendance History")
-    df = load_data()
-    st.dataframe(df)
+# Sidebar
+tab = st.sidebar.radio("Navigation", ["Scan", "Today", "History", "Tracking", "Manage"])
 
-# ---------- PAGE: TRACKING ---------- #
-elif page == "Tracking":
-    st.title("📈 Attendance Tracking")
-    df = load_data()
-    attendance_cols = df.columns[4:]
-    student_attendance = []
+df = load_data()
+today_str = datetime.date.today().strftime("%-d-%b")  # e.g., 21-Aug
 
-    for _, row in df.iterrows():
-        total = len(attendance_cols)
-        present = sum([1 for day in attendance_cols if row[day] == "Present"])
-        percent = round((present / total) * 100) if total > 0 else 0
-        student_attendance.append({
-            "Name": row["Name"],
-            "Surname": row["Surname"],
-            "Grade": row["Grade"],
-            "Attendance %": percent,
-            "Status": "✅" if percent >= MIN_ATTENDANCE_PERCENT else "❌"
-        })
-
-    st.dataframe(pd.DataFrame(student_attendance))
-
-    st.subheader("📊 Grade Attendance Overview")
-    for grade in sorted(df["Grade"].unique()):
-        grade_df = df[df["Grade"] == grade]
-        total = len(grade_df)
-        passing = 0
-        for _, row in grade_df.iterrows():
-            present = sum([1 for col in attendance_cols if row[col] == "Present"])
-            percent = round((present / len(attendance_cols)) * 100) if attendance_cols.any() else 0
-            if percent >= MIN_ATTENDANCE_PERCENT:
-                passing += 1
-        attendance_rate = round((passing / GRADE_BENCHMARK) * 100)
-        st.write(f"**Grade {grade}**: {attendance_rate}% met 70% requirement")
-
-# ---------- PAGE: MANAGE ---------- #
-elif page == "Manage":
-    st.title("⚙️ Manage Students")
-    df = load_data()
-
-    st.subheader("📝 Add Student")
-    with st.form("add_form"):
-        name = st.text_input("Name")
-        surname = st.text_input("Surname")
-        grade = st.selectbox("Grade", ["5", "6", "7"])
-        submitted = st.form_submit_button("Add Student")
-        if submitted and name and surname:
-            new_row = pd.DataFrame([[name, surname, grade, name]], columns=df.columns[:4])
-            df = pd.concat([df, new_row], ignore_index=True)
+# ------------------ SCAN ------------------
+if tab == "Scan":
+    st.header("🔍 Scan Student Barcode")
+    scanned = st.text_input("Scan or Enter Barcode")
+    if scanned:
+        barcode = f"{int(scanned):04d}"
+        if barcode in df["Barcode"].values:
+            idx = df[df["Barcode"] == barcode].index[0]
+            df.at[idx, today_str] = 1
             save_data(df)
-            st.success(f"Student {name} added.")
+            st.success(f"✅ Marked Present: {df.at[idx, 'Name']} (Barcode {barcode})")
+        else:
+            st.error("❌ Barcode not found.")
 
-    st.subheader("🗑️ Delete Student")
-    student_to_delete = st.selectbox("Select student", df["Name"] + " " + df["Surname"])
-    if st.button("Delete Student"):
-        name, surname = student_to_delete.split(" ", 1)
-        df = df[~((df["Name"] == name) & (df["Surname"] == surname))]
-        save_data(df)
-        st.success(f"Deleted {student_to_delete}")
+# ------------------ TODAY ------------------
+elif tab == "Today":
+    st.header(f"🗓️ Attendance Today – {today_str}")
+    if today_str not in df.columns:
+        df[today_str] = ""
+    temp = df[["Name", "Surname", "Grade", today_str]].copy()
+    temp[today_str] = temp[today_str].apply(format_attendance)
+    st.dataframe(temp)
 
-    st.subheader("📂 Download Data")
-    st.download_button("Download CSV", df.to_csv(index=False), "attendance_backup.csv", "text/csv")
+# ------------------ HISTORY ------------------
+elif tab == "History":
+    st.header("📚 Attendance History")
+    hist_df = df.copy()
+    attendance_cols = hist_df.columns[9:]
+    for col in attendance_cols:
+        hist_df[col] = hist_df[col].apply(format_attendance)
+    st.dataframe(hist_df)
+
+# ------------------ TRACKING ------------------
+elif tab == "Tracking":
+    st.header("📈 Attendance Tracking")
+    temp = df.copy()
+    attendance_cols = temp.columns[9:]
+    total_sessions = len(attendance_cols)
+    temp["Present Count"] = temp[attendance_cols].apply(lambda row: sum([1 for x in row if x == 1 or x == '1']), axis=1)
+    temp["% Attendance"] = (temp["Present Count"] / total_sessions * 100).round(1)
+
+    # Grade tracking (assuming 20 per grade as benchmark)
+    grades = sorted(temp["Grade"].unique())
+    st.subheader("📊 Student Attendance %")
+    st.dataframe(temp[["Name", "Surname", "Grade", "% Attendance"]])
+
+    st.subheader("📊 Grade Attendance Summary")
+    for g in grades:
+        sub = temp[temp["Grade"] == g]
+        avg = sub["% Attendance"].mean()
+        st.markdown(f"**Grade {g}:** Average Attendance: `{avg:.1f}%`")
+
+# ------------------ MANAGE ------------------
+elif tab == "Manage":
+    st.header("⚙️ Manage Student Records")
+
+    action = st.radio("Action", ["Add Student", "Edit Student", "Delete Student"])
+
+    if action == "Add Student":
+        with st.form("Add Form"):
+            name = st.text_input("Name")
+            surname = st.text_input("Surname")
+            grade = st.selectbox("Grade", [5, 6, 7])
+            barcode = st.text_input("Barcode (4-digit number)")
+            submit = st.form_submit_button("➕ Add Student")
+            if submit:
+                new_row = {
+                    "Name": name,
+                    "Surname": surname,
+                    "Gender": "",
+                    "Age": "",
+                    "School": "",
+                    "Grade": grade,
+                    "Contact": "",
+                    "Barcode": f"{int(barcode):04d}"
+                }
+                for col in df.columns[9:]:
+                    new_row[col] = ""
+                df.loc[len(df)] = new_row
+                save_data(df)
+                st.success("✅ Student added successfully!")
+
+    elif action == "Edit Student":
+        selected = st.selectbox("Select Student", df["Name"] + " " + df["Surname"])
+        idx = df[df["Name"] + " " + df["Surname"] == selected].index[0]
+        with st.form("Edit Form"):
+            name = st.text_input("Name", df.at[idx, "Name"])
+            surname = st.text_input("Surname", df.at[idx, "Surname"])
+            grade = st.selectbox("Grade", [5, 6, 7], index=[5,6,7].index(int(df.at[idx, "Grade"])))
+            submit = st.form_submit_button("💾 Save Changes")
+            if submit:
+                df.at[idx, "Name"] = name
+                df.at[idx, "Surname"] = surname
+                df.at[idx, "Grade"] = grade
+                save_data(df)
+                st.success("✅ Student updated!")
+
+    elif action == "Delete Student":
+        selected = st.selectbox("Select Student to Delete", df["Name"] + " " + df["Surname"])
+        if st.button("❌ Confirm Delete"):
+            df = df[~((df["Name"] + " " + df["Surname"]) == selected)]
+            save_data(df)
+            st.success("🗑️ Student deleted.")
+
