@@ -1,212 +1,134 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime
-from pathlib import Path
+import datetime
+import os
 
-# ---------- CONFIG ----------
-st.set_page_config(page_title="Tutor Class Attendance Register 2025", layout="wide")
-CSV_FILE = "attendance_clean.csv"
+DATA_PATH = 'attendance_data.csv'
 
-# ---------- HELPERS ----------
-def today_label():
-    return datetime.now().strftime("%d-%b")
-
-def load_data(file_path=CSV_FILE):
-    path = Path(file_path)
-    if path.exists():
-        df = pd.read_csv(path, dtype=str).fillna("")
+def load_data():
+    if os.path.exists(DATA_PATH):
+        return pd.read_csv(DATA_PATH)
     else:
-        df = pd.DataFrame()
-    return df
+        return pd.DataFrame(columns=["Name", "Surname", "Barcode", "Grade", "Area"])
 
-def save_data(df, file_path=CSV_FILE):
-    df.to_csv(file_path, index=False)
+def save_data(df):
+    df.to_csv(DATA_PATH, index=False)
 
-def ensure_today_column(df):
-    today = today_label()
-    if today not in df.columns:
-        df[today] = ""
+def get_today_col():
+    today = datetime.datetime.now().strftime('%-d-%b')
     return today
 
-def normalize_code(code):
-    return str(code).strip().lstrip("0") or "0"
+def mark_attendance(barcode):
+    df = load_data()
+    today_col = get_today_col()
 
-def label_row(row):
-    return f"{row.get('Name','')} {row.get('Surname','')}"
+    if today_col not in df.columns:
+        df[today_col] = ""
 
-def get_date_columns(df):
-    cols = []
-    for c in df.columns:
-        parts = c.split("-")
-        if len(parts) == 2 and parts[0].isdigit():
-            cols.append(c)
-    return sorted(cols, key=lambda x: datetime.strptime(x, "%d-%b").timetuple().tm_yday)
-
-# ---------- MARKING ----------
-def mark_present(barcode, df):
-    barcode = normalize_code(barcode)
-    today = ensure_today_column(df)
-    match = df[df['Barcode'].apply(normalize_code) == barcode]
-    if match.empty:
-        return False, "❌ Barcode not found in register."
-    
-    index = match.index[0]
-    name = label_row(df.loc[index])
-    if df.at[index, today] == "1":
-        return False, f"ℹ️ {name} already marked present today."
-    df.at[index, today] = "1"
-    save_data(df)
-    return True, f"✅ {name} marked PRESENT for {today}."
-
-# ---------- FILE UPLOAD ----------
-with st.sidebar:
-    st.header("📁 Upload attendance register CSV file")
-    uploaded = st.file_uploader("Upload attendance register", type=["csv"])
-    if uploaded:
-        df = pd.read_csv(uploaded, dtype=str).fillna("")
+    if barcode in df['Barcode'].values:
+        df.loc[df['Barcode'] == barcode, today_col] = "Present"
         save_data(df)
-        st.success("✅ File uploaded and loaded successfully!")
+        student = df[df['Barcode'] == barcode].iloc[0]
+        return f"✅ Marked Present: {student['Name']} {student['Surname']}"
+    else:
+        return "❌ Student not found."
 
-# ---------- LOAD CSV ----------
-df = load_data()
-today = today_label()
-if not df.empty:
-    ensure_today_column(df)
+def calculate_attendance(df):
+    attendance_cols = [col for col in df.columns if '-' in col]
+    present_count = df[attendance_cols].apply(lambda row: (row == 'Present').sum(), axis=1)
+    total_sessions = len(attendance_cols)
+    attendance_percent = (present_count / total_sessions * 100).round(2) if total_sessions > 0 else 0
+    last_present = df[attendance_cols].apply(lambda row: row[row == 'Present'].last_valid_index(), axis=1)
+    df['Present'] = present_count
+    df['Absent'] = total_sessions - present_count
+    df['Attendance %'] = attendance_percent
+    df['Last present'] = last_present
+    return df
 
-# ---------- PAGE TITLE ----------
-st.markdown(f"<h1>✅ Tutor Class Attendance Register 2025</h1>", unsafe_allow_html=True)
-st.markdown(f"Today: <b>{today}</b>", unsafe_allow_html=True)
+st.set_page_config(page_title="Tutor Class Attendance Register 2025", layout="wide")
+st.markdown("## ✅ Tutor Class Attendance Register 2025")
+st.write(f"Today: **{get_today_col()}**")
 
-# ---------- TABS ----------
-tabs = st.tabs(["📷 Scan", "📅 Today", "📚 History", "📈 Tracking", "🛠 Manage"])
+tabs = st.tabs(["📷 Scan", "📅 Today", "📜 History", "📊 Tracking", "🛠️ Manage"])
 
-# ---------- SCAN ----------
+# 📷 Scan Tab
 with tabs[0]:
-    st.subheader("📷 Scan Attendance")
-    barcode = st.text_input("Scan Barcode:", key="scan_input", label_visibility="collapsed")
-    if st.button("Mark Present"):
-        if barcode:
-            success, msg = mark_present(barcode, df)
-            st.success(msg) if success else st.error(msg)
+    st.subheader("📷 Scan Student Barcode")
+    barcode = st.text_input("Scan or Enter Student Barcode")
+    if barcode:
+        message = mark_attendance(barcode.strip())
+        st.success(message)
 
-# ---------- TODAY ----------
+# 📅 Today Tab
 with tabs[1]:
-    st.subheader(f"📅 Attendance for Today: {today}")
-    if today not in df.columns:
-        st.warning("No attendance marked for today yet.")
-    else:
-        present = df[df[today] == "1"]
-        absent = df[df[today] != "1"]
-        total = len(present) + len(absent)
+    st.subheader("📅 Today’s Attendance")
+    df = load_data()
+    today_col = get_today_col()
+    if today_col not in df.columns:
+        df[today_col] = ""
+    st.dataframe(df[["Name", "Surname", "Grade", "Area", "Barcode", today_col]])
 
-        st.write(f"**Registered:** {total}  |  **Present:** {len(present)}  |  **Absent:** {len(absent)}")
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("#### Present")
-            st.dataframe(present[["Name", "Surname", "Barcode", today]], use_container_width=True)
-        with c2:
-            st.markdown("#### Absent")
-            st.dataframe(absent[["Name", "Surname", "Barcode"]], use_container_width=True)
-
-# ---------- HISTORY ----------
+# 📜 History Tab
 with tabs[2]:
-    st.subheader("📚 History")
-    dates = get_date_columns(df)
-    if dates:
-        selected = st.selectbox("Select date", reversed(dates))
-        hist_present = df[df[selected] == "1"]
-        hist_absent = df[df[selected] != "1"]
-        st.write(f"**Present:** {len(hist_present)} | **Absent:** {len(hist_absent)}")
+    st.subheader("📜 Attendance History")
+    df = load_data()
+    editable_df = st.data_editor(df, num_rows="dynamic", key="history_edit")
+    if st.button("💾 Save History Changes"):
+        save_data(editable_df)
+        st.success("✅ Changes saved!")
 
-        st.dataframe(df[["Name", "Surname", "Barcode", selected]], use_container_width=True)
-    else:
-        st.info("No attendance history found.")
-
-# ---------- TRACKING ----------
+# 📊 Tracking Tab
 with tabs[3]:
-    st.subheader("📈 Tracking (per student)")
-    dates = get_date_columns(df)
-    if not dates:
-        st.info("No sessions found yet.")
-    else:
-        present_matrix = df[dates].applymap(lambda x: 1 if x.strip() == "1" else 0)
-        df["Sessions"] = len(dates)
-        df["Present"] = present_matrix.sum(axis=1)
-        df["Absent"] = df["Sessions"] - df["Present"]
-        df["Attendance %"] = (df["Present"] / df["Sessions"] * 100).round(1)
+    st.subheader("📊 Attendance Tracking")
+    df = load_data()
+    df = calculate_attendance(df)
+    display_df = df[["Name", "Surname", "Barcode", "Present", "Absent", "Attendance %", "Last present"]]
+    st.dataframe(display_df)
 
-        # Last Present Date
-        def last_present(row):
-            indexes = [i for i, v in enumerate(row) if v == 1]
-            return dates[max(indexes)] if indexes else "—"
-
-        df["Last present"] = present_matrix.apply(last_present, axis=1)
-
-        # Streaks
-        def streaks(row):
-            lst = row.tolist()
-            longest = cur = 0
-            for v in lst:
-                if v == 1:
-                    cur += 1
-                    longest = max(longest, cur)
-                else:
-                    cur = 0
-            current = 0
-            for v in reversed(lst):
-                if v == 1:
-                    current += 1
-                else:
-                    break
-            return pd.Series([current, longest])
-        
-        df[["Current streak", "Longest streak"]] = present_matrix.apply(streaks, axis=1)
-
-        st.dataframe(df[["Name", "Surname", "Barcode", "Sessions", "Present", "Absent",
-                         "Attendance %", "Last present", "Current streak", "Longest streak"]],
-                     use_container_width=True)
-
-# ---------- MANAGE ----------
+# 🛠️ Manage Tab
 with tabs[4]:
-    st.subheader("🛠 Manage Learners / Barcodes")
+    st.subheader("🛠️ Manage Students")
+    df = load_data()
 
-    with st.expander("🔍 Search Learners"):
-        search = st.text_input("Search by name, surname or barcode")
-        if search:
-            search_lower = search.lower().strip()
-            filtered = df[df.apply(lambda row: search_lower in str(row["Name"]).lower() 
-                                   or search_lower in str(row["Surname"]).lower()
-                                   or search_lower in str(row["Barcode"]).lower(), axis=1)]
-            st.dataframe(filtered[["Name", "Surname", "Barcode"]], use_container_width=True)
-        else:
-            st.dataframe(df[["Name", "Surname", "Barcode"]], use_container_width=True)
+    # Add new student
+    with st.expander("➕ Add New Student"):
+        with st.form("add_student_form"):
+            name = st.text_input("Name")
+            surname = st.text_input("Surname")
+            barcode = st.text_input("Barcode")
+            grade = st.selectbox("Grade", ["5", "6", "7"])
+            area = st.text_input("Area")
+            submitted = st.form_submit_button("Add Student")
+            if submitted:
+                new_student = pd.DataFrame([[name, surname, barcode, grade, area]], columns=["Name", "Surname", "Barcode", "Grade", "Area"])
+                updated_df = pd.concat([df, new_student], ignore_index=True)
+                save_data(updated_df)
+                st.success(f"✅ {name} {surname} added.")
 
-    st.markdown("---")
-    st.markdown("### ✍️ Assign Barcode")
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        name = st.text_input("Name")
-    with col2:
-        surname = st.text_input("Surname")
-    with col3:
-        barcode = st.text_input("Barcode")
+    # Delete student
+    with st.expander("🗑️ Delete Student"):
+        barcodes = df['Barcode'].tolist()
+        selected_barcode = st.selectbox("Select Barcode", barcodes)
+        if st.button("Delete"):
+            updated_df = df[df['Barcode'] != selected_barcode]
+            save_data(updated_df)
+            st.success("✅ Student deleted.")
 
-    if st.button("Save Barcode"):
-        mask = (df["Name"].str.strip().str.lower() == name.strip().lower()) & \
-               (df["Surname"].str.strip().str.lower() == surname.strip().lower())
-        idx = df.index[mask]
-        if idx.any():
-            df.loc[idx, "Barcode"] = barcode
+    # Edit student data
+    with st.expander("✏️ Edit Student Details"):
+        row_index = st.number_input("Enter row number to edit (starting from 0)", min_value=0, max_value=len(df) - 1, step=1)
+        selected_row = df.iloc[row_index]
+        name = st.text_input("Name", value=selected_row["Name"], key="edit_name")
+        surname = st.text_input("Surname", value=selected_row["Surname"], key="edit_surname")
+        barcode = st.text_input("Barcode", value=selected_row["Barcode"], key="edit_barcode")
+        grade = st.text_input("Grade", value=str(selected_row["Grade"]), key="edit_grade")
+        area = st.text_input("Area", value=selected_row["Area"], key="edit_area")
+        if st.button("Save edits"):
+            df.at[row_index, "Name"] = name
+            df.at[row_index, "Surname"] = surname
+            df.at[row_index, "Barcode"] = barcode
+            df.at[row_index, "Grade"] = grade
+            df.at[row_index, "Area"] = area
             save_data(df)
-            st.success("✅ Barcode saved!")
-        else:
-            st.error("❌ Learner not found.")
+            st.success("✅ Changes saved!")
 
-    st.markdown("---")
-    new_col = st.text_input("Add new date column (e.g. 25-Aug)")
-    if st.button("Add Date"):
-        if new_col.strip():
-            df[new_col] = ""
-            save_data(df)
-            st.success(f"✅ Added new column: {new_col}")
