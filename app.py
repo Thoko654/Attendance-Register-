@@ -1,111 +1,204 @@
+# Tutor Class Attendance Register 2025 — Streamlit App
+
 import streamlit as st
 import pandas as pd
-import os
 from datetime import datetime
+from pathlib import Path
+from contextlib import contextmanager
+import time
 
-# --- CONFIG ---
-st.set_page_config(page_title="Tutor Class Attendance Register 2025", layout="wide")
-st.title("📚 Tutor Class Attendance Register 2025")
+CSV_DEFAULT = "attendance_clean.csv"
 
-attendance_path = "Attendance.csv"
-today = datetime.today().strftime('%-d-%b')  # e.g., 21-Aug
+# ---------- Utilities ----------
+def today_col_label():
+    return datetime.now().strftime("%d-%b").lstrip("0")
 
-# --- HELPER FUNCTIONS ---
-def load_data():
-    if os.path.exists(attendance_path):
-        return pd.read_csv(attendance_path)
-    else:
-        return pd.DataFrame(columns=["ID", "Name", "Grade"])
+def _norm(code: str) -> str:
+    return str(code).strip().lstrip("0") or "0"
 
-def save_data(df):
-    df.to_csv(attendance_path, index=False)
+@contextmanager
+def file_guard(path: Path):
+    for _ in range(6):
+        try:
+            yield
+            return
+        except Exception:
+            time.sleep(0.2)
 
-def mark_present(df, student_id):
-    if today not in df.columns:
-        df[today] = ""
-    df.loc[df['ID'] == student_id, today] = "Present"
+def load_sheet(csv_path: Path) -> pd.DataFrame:
+    if not csv_path.exists():
+        return pd.DataFrame()
+    with file_guard(csv_path):
+        df = pd.read_csv(csv_path, dtype=str).fillna("")
+    for col in ["Barcode", "Name", "Surname"]:
+        if col not in df.columns:
+            df[col] = ""
     return df
 
-# --- LOAD DATA ---
-df = load_data()
+def save_sheet(df: pd.DataFrame, csv_path: Path):
+    with file_guard(csv_path):
+        df.to_csv(csv_path, index=False)
 
-# --- TABS ---
-tab1, tab2, tab3, tab4 = st.tabs(["📷 Scan", "📅 Today", "📊 Tracking", "🛠️ Manage"])
+def ensure_date_column(df: pd.DataFrame, col: str):
+    if col not in df.columns:
+        df[col] = ""
 
-# --- TAB 1: SCAN ---
-with tab1:
-    st.header("📷 Scan to Mark Attendance")
-    scanned_id = st.text_input("Scan or Enter Student ID")
+def ensure_today_column(df: pd.DataFrame) -> str:
+    col = today_col_label()
+    ensure_date_column(df, col)
+    return col
 
-    if scanned_id:
-        if scanned_id in df["ID"].astype(str).values:
-            df = mark_present(df, scanned_id)
-            save_data(df)
-            st.success(f"Marked Present for ID: {scanned_id}")
-        else:
-            st.error("Student ID not found.")
+def label_for_row(r: pd.Series) -> str:
+    return f"{r.get('Name','').strip()} {r.get('Surname','').strip()}".strip()
 
-# --- TAB 2: TODAY ---
-with tab2:
-    st.header(f"📅 Attendance for Today ({today})")
-    if today in df.columns:
-        present_students = df[df[today] == "Present"][["ID", "Name", "Grade"]]
-        st.metric("✅ Present Today", len(present_students))
-        st.dataframe(present_students)
-    else:
-        st.warning(f"No attendance has been recorded yet for today ({today}).")
+def get_date_columns(df: pd.DataFrame):
+    return sorted([
+        c for c in df.columns
+        if "-" in c and c.split("-")[0].isdigit()
+    ], key=lambda x: datetime.strptime(x, "%d-%b").timetuple().tm_yday)
 
-# --- TAB 3: TRACKING ---
-with tab3:
-    st.header("📊 Attendance Tracking Summary")
-
+def mark_present(barcode: str, csv_path: Path):
+    if not barcode.strip():
+        return False, "Empty scan."
+    df = load_sheet(csv_path)
     if df.empty:
+        return False, "Attendance sheet is empty or not found."
+    today_col = ensure_today_column(df)
+    matches = df.index[df["Barcode"].apply(_norm) == _norm(barcode)].tolist()
+    if not matches:
+        return False, "Student ID not found."
+    msg = []
+    for i in matches:
+        name = label_for_row(df.loc[i]) or f"[{df.at[i,'Barcode']}]"
+        if str(df.at[i, today_col]).strip() == "1":
+            msg.append(f"ℹ️ {name} already marked.")
+        else:
+            df.at[i, today_col] = "1"
+            msg.append(f"✅ {name} marked PRESENT.")
+    save_sheet(df, csv_path)
+    return True, "\n".join(msg)
+
+def get_present_absent(df, date_col, grade=None, area=None):
+    if date_col not in df.columns:
+        return df.iloc[0:0], df.copy()
+    filt = pd.Series([True]*len(df))
+    if grade and "Grade" in df.columns:
+        filt &= df["Grade"].astype(str) == str(grade)
+    if area and "Area" in df.columns:
+        filt &= df["Area"].astype(str) == str(area)
+    subset = df[filt].copy()
+    return subset[subset[date_col] == "1"], subset[subset[date_col] != "1"]
+
+def unique_sorted(series):
+    vals = sorted([v for v in series.astype(str).unique() if v.strip()])
+    return ["(All)"] + vals
+
+# ---------- Tracking ----------
+def compute_tracking(df: pd.DataFrame) -> pd.DataFrame:
+    date_cols = get_date_columns(df)
+    if not date_cols:
+        return pd.DataFrame(columns=["Name","Surname","Barcode","Present","Absent","Attendance %","Last present"])
+    present_mat = df[date_cols].applymap(lambda x: 1 if x.strip() == "1" else 0)
+    total_sessions = len(date_cols)
+    present_counts = present_mat.sum(axis=1)
+    absent_counts = total_sessions - present_counts
+    pct = (present_counts / total_sessions * 100).round(1)
+    last_present = [
+        date_cols[max([i for i, val in enumerate(row) if val == 1])] if any(row) else "—"
+        for row in present_mat.values.tolist()
+    ]
+    return pd.DataFrame({
+        "Name": df.get("Name",""),
+        "Surname": df.get("Surname",""),
+        "Barcode": df.get("Barcode",""),
+        "Present": present_counts,
+        "Absent": absent_counts,
+        "Attendance %": pct,
+        "Last present": last_present
+    })
+
+# ---------- UI ----------
+st.set_page_config("Tutor Class Attendance Register 2025", "✅", layout="wide")
+
+st.markdown("""
+    <style>
+    .app-title {font-size: 28px; font-weight: bold;}
+    .stat-card {padding: 10px 14px; border: 1px solid #eee; border-radius: 10px;}
+    </style>
+""", unsafe_allow_html=True)
+
+st.title("📚 Tutor Class Attendance Register 2025")
+
+with st.sidebar:
+    csv_path_str = st.text_input("CSV file path", CSV_DEFAULT)
+    csv_path = Path(csv_path_str).expanduser()
+
+tabs = st.tabs(["📷 Scan", "📅 Today", "📈 Tracking", "🛠 Manage"])
+
+# ---------- Tab 1: Scan ----------
+with tabs[0]:
+    st.header("📸 Scan to Mark Attendance")
+    scan = st.text_input("Scan or Enter Student ID", key="scan_id")
+    if st.button("Mark Present"):
+        if scan:
+            ok, msg = mark_present(scan, csv_path)
+            st.success(msg) if ok else st.error(msg)
+            st.session_state.scan_id = ""
+
+# ---------- Tab 2: Today ----------
+with tabs[1]:
+    st.header(f"📅 Attendance for Today ({today_col_label()})")
+    df = load_sheet(csv_path)
+    if df.empty:
+        st.warning("No attendance has been recorded yet for today.")
+    else:
+        col = ensure_today_column(df)
+        present, absent = get_present_absent(df, col)
+        st.markdown(f"✅ Present: **{len(present)}** | ❌ Absent: **{len(absent)}**")
+        st.dataframe(present[["Name","Surname","Barcode"]])
+        st.download_button("📥 Download Present", present.to_csv(index=False), "present.csv")
+
+# ---------- Tab 3: Tracking ----------
+with tabs[2]:
+    st.header("📊 Attendance Tracking Summary")
+    df = load_sheet(csv_path)
+    if df.empty or not get_date_columns(df):
         st.info("No attendance data yet.")
     else:
-        attendance_columns = df.columns[3:]
-        df['Total'] = (df[attendance_columns] == "Present").sum(axis=1)
-        df['Possible'] = len(attendance_columns)
-        df['% Attendance'] = (df['Total'] / df['Possible'] * 100).fillna(0).round(1)
-        st.dataframe(df[["ID", "Name", "Grade", "% Attendance"]])
+        summary = compute_tracking(df)
+        st.dataframe(summary, use_container_width=True)
+        st.download_button("📥 Download Tracking CSV", summary.to_csv(index=False), "tracking.csv")
 
-        st.subheader("🎯 Grade Level Attendance")
-        grade_summary = df.groupby("Grade")["% Attendance"].mean().round(1).reset_index()
-        st.dataframe(grade_summary.rename(columns={"% Attendance": "Avg Attendance %"}))
-
-# --- TAB 4: MANAGE ---
-with tab4:
-    st.header("🛠️ Manage Students & Attendance")
-
-    manage_option = st.selectbox("Choose Action", ["Add Student", "Delete Student", "Edit Attendance"])
-
-    if manage_option == "Add Student":
-        with st.form("add_form"):
-            new_id = st.text_input("Student ID")
-            new_name = st.text_input("Name")
-            new_grade = st.selectbox("Grade", ["5", "6", "7"])
-            submitted = st.form_submit_button("Add Student")
-            if submitted:
-                if new_id in df["ID"].astype(str).values:
-                    st.error("Student ID already exists.")
-                else:
-                    df.loc[len(df)] = [new_id, new_name, new_grade] + [""] * (len(df.columns) - 3)
-                    save_data(df)
-                    st.success("Student added.")
-
-    elif manage_option == "Delete Student":
-        delete_id = st.selectbox("Select Student ID", df["ID"].astype(str))
-        if st.button("Delete"):
-            df = df[df["ID"].astype(str) != delete_id]
-            save_data(df)
-            st.success(f"Deleted Student ID: {delete_id}")
-
-    elif manage_option == "Edit Attendance":
-        if not df.empty:
-            row_index = st.number_input("Enter row number to edit (starting from 0)", min_value=0, max_value=len(df) - 1, step=1)
-            if st.button("Clear Attendance"):
-                df.iloc[row_index, 3:] = ""
-                save_data(df)
-                st.success("Attendance cleared for selected row.")
-            st.dataframe(df.iloc[[row_index]])
+# ---------- Tab 4: Manage ----------
+with tabs[3]:
+    st.header("🛠 Manage Students & Attendance")
+    df = load_sheet(csv_path)
+    action = st.selectbox("Choose Action", ["Add Student", "Edit Student", "Delete Student"])
+    if action == "Add Student":
+        sid = st.text_input("Student ID")
+        name = st.text_input("Name")
+        grade = st.text_input("Grade")
+        if st.button("Add"):
+            new_row = pd.DataFrame({"Barcode":[sid], "Name":[name], "Grade":[grade]})
+            df = pd.concat([df, new_row], ignore_index=True)
+            save_sheet(df, csv_path)
+            st.success("Student added.")
+    elif action == "Edit Student":
+        sid = st.text_input("Enter Student ID to Edit")
+        match = df[df["Barcode"] == sid]
+        if not match.empty:
+            name = st.text_input("New Name", match.iloc[0]["Name"])
+            grade = st.text_input("New Grade", match.iloc[0].get("Grade", ""))
+            if st.button("Save Changes"):
+                df.loc[df["Barcode"] == sid, "Name"] = name
+                df.loc[df["Barcode"] == sid, "Grade"] = grade
+                save_sheet(df, csv_path)
+                st.success("Student updated.")
         else:
-            st.warning("No data to edit.")
+            st.warning("Student not found.")
+    elif action == "Delete Student":
+        sid = st.text_input("Enter Student ID to Delete")
+        if st.button("Delete"):
+            df = df[df["Barcode"] != sid]
+            save_sheet(df, csv_path)
+            st.success("Student deleted.")
