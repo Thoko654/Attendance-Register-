@@ -3,7 +3,7 @@ import pandas as pd
 import datetime
 import os
 
-CSV_PATH = "AttendanceRegister.csv"
+CSV_PATH = "attendance_clean.csv"
 
 # Load and preprocess CSV
 @st.cache_data(ttl=60)
@@ -136,4 +136,5 @@ elif tab == "Manage":
             df = df[~((df["Name"] + " " + df["Surname"]) == selected)]
             save_data(df)
             st.success("🗑️ Student deleted.")
+
 
