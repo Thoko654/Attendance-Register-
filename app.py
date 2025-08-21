@@ -1,136 +1,139 @@
 import streamlit as st
 import pandas as pd
 import datetime
-import hashlib
 import base64
+import hashlib
 
-# Load data
+# ---------- CONFIG ----------
+st.set_page_config(page_title="Tutor Class Attendance Register 2025", layout="wide")
+
+# ---------- GLOBALS ----------
+CSV_FILE = "attendance_clean.csv"
+PASSWORD_FILE = "credentials.csv"
+
+# ---------- HELPER FUNCTIONS ----------
 @st.cache_data
 def load_data():
-    return pd.read_csv("attendance.csv")
+    return pd.read_csv(CSV_FILE)
+
+@st.cache_data
+def load_credentials():
+    return pd.read_csv(PASSWORD_FILE)
 
 def save_data(df):
-    df.to_csv("attendance.csv", index=False)
+    df.to_csv(CSV_FILE, index=False)
 
-# Utility functions
-def get_month_name(date_str):
-    try:
-        return datetime.datetime.strptime(date_str, "%d-%b").strftime("%B")
-    except:
-        return "Unknown"
+def save_credentials(df):
+    df.to_csv(PASSWORD_FILE, index=False)
 
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
-def get_attendance_columns(df):
-    return [col for col in df.columns if "-" in col and col[0].isdigit()]
+def authenticate_user(username, password):
+    users = load_credentials()
+    hashed_pw = hash_password(password)
+    user = users[(users['username'] == username) & (users['password'] == hashed_pw)]
+    if not user.empty:
+        return user.iloc[0]['role']
+    return None
 
-# App
-st.set_page_config(page_title="Tutor Class Attendance Register 2025", layout="wide")
-st.title("📘 Tutor Class Attendance Register 2025")
+# ---------- LOGIN ----------
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+    st.session_state.role = None
+    st.session_state.username = None
 
-menu = st.sidebar.radio("Select Page", ["Scan", "Today", "History", "Tracking", "Manage"])
-
-df = load_data()
-attendance_cols = get_attendance_columns(df)
-
-# ========== SCAN TAB ==========
-if menu == "Scan":
-    st.header("📷 Scan Barcode")
-    scanned_name = st.text_input("Scan Barcode or Enter Student Name")
-    if scanned_name:
-        today = datetime.datetime.now().strftime("%d-%b")
-        if today not in df.columns:
-            df[today] = ""
-        matched = df[df["Name"] + " " + df["Surname"] == scanned_name]
-        if not matched.empty:
-            df.loc[matched.index, today] = "Present"
-            save_data(df)
-            st.success(f"{scanned_name} marked as Present on {today}")
+if not st.session_state.authenticated:
+    st.title("🔐 Login to Attendance System")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+    if st.button("Login"):
+        role = authenticate_user(username, password)
+        if role:
+            st.session_state.authenticated = True
+            st.session_state.username = username
+            st.session_state.role = role
+            st.success("Login successful!")
+            st.rerun()
         else:
-            st.error("Student not found.")
+            st.error("Invalid credentials")
+    st.stop()
 
-# ========== TODAY TAB ==========
-elif menu == "Today":
-    st.header("📅 Mark Today's Attendance")
-    today = datetime.datetime.now().strftime("%d-%b")
+# ---------- LOAD DATA ----------
+df = load_data()
+today = datetime.date.today().strftime("%-d-%b")
+
+# ---------- SIDEBAR ----------
+st.sidebar.title("Select Page")
+page = st.sidebar.radio("Select Page", ["Scan", "Today", "History", "Tracking", "Manage"])
+
+# ---------- SCAN ----------
+if page == "Scan":
+    st.title("📷 Scan Student Attendance")
+    scanned_name = st.text_input("Scan barcode / Enter name")
+    if st.button("Mark Present"):
+        if scanned_name in df["Name"].values:
+            df.loc[df["Name"] == scanned_name, today] = "Present"
+            save_data(df)
+            st.success(f"{scanned_name} marked as present for {today}")
+        else:
+            st.error("Student not found!")
+
+# ---------- TODAY ----------
+elif page == "Today":
+    st.title(f"📅 Attendance for Today: {today}")
     if today not in df.columns:
         df[today] = ""
-    for i, row in df.iterrows():
-        status = st.selectbox(
-            f"{row['Name']} {row['Surname']} - Grade {row['Grade']}",
-            ["", "Present", "Absent", "Late", "Excused"],
-            key=f"status_{i}"
-        )
-        if status:
-            df.at[i, today] = status
-    if st.button("✅ Save Attendance"):
         save_data(df)
-        st.success("Today's attendance saved.")
+    st.dataframe(df[["Name", "Grade", today]])
 
-# ========== HISTORY TAB ==========
-elif menu == "History":
-    st.header("📅 Edit Attendance History")
-    dates = attendance_cols
-    selected_date = st.selectbox("Choose Date to Edit:", dates)
-    for i, row in df.iterrows():
-        key = f"{row['Name']}_{selected_date}"
-        new_status = st.selectbox(
-            f"{row['Name']} {row['Surname']} - {selected_date}",
-            ["", "Present", "Absent", "Late", "Excused"],
-            index=["", "Present", "Absent", "Late", "Excused"].index(row.get(selected_date, "")) if row.get(selected_date) in ["Present", "Absent", "Late", "Excused"] else 0,
-            key=key
-        )
-        df.at[i, selected_date] = new_status
-    if st.button("💾 Save Changes"):
+# ---------- HISTORY ----------
+elif page == "History":
+    st.title("📜 Attendance History")
+    st.dataframe(df)
+
+# ---------- TRACKING ----------
+elif page == "Tracking":
+    st.title("📊 Attendance Tracking")
+    attendance_cols = df.columns[3:]
+    summary = pd.DataFrame()
+    summary["Name"] = df["Name"]
+    summary["Grade"] = df["Grade"]
+    summary["Total Present"] = df[attendance_cols].apply(lambda row: (row == "Present").sum(), axis=1)
+    summary["% Attendance"] = (summary["Total Present"] / len(attendance_cols) * 100).round(1)
+    st.dataframe(summary)
+
+# ---------- MANAGE ----------
+elif page == "Manage":
+    st.title("⚙️ Manage Students")
+    st.subheader("Add New Student")
+    with st.form("add_student"):
+        name = st.text_input("Name")
+        grade = st.selectbox("Grade", [5, 6, 7])
+        submitted = st.form_submit_button("Add Student")
+        if submitted:
+            new_row = {"Name": name, "Grade": grade}
+            for col in df.columns[2:]:
+                new_row[col] = ""
+            df = df.append(new_row, ignore_index=True)
+            save_data(df)
+            st.success("Student added!")
+
+    st.subheader("Delete Student")
+    student_to_delete = st.selectbox("Select Student", df["Name"])
+    if st.button("Delete"):
+        df = df[df["Name"] != student_to_delete]
         save_data(df)
-        st.success("History updated successfully.")
+        st.success("Student deleted")
 
-# ========== TRACKING TAB ==========
-elif menu == "Tracking":
-    st.header("📊 Attendance Tracking")
+    # Admin-only section
+    if st.session_state.role == "admin":
+        st.subheader("Admin: Reset Password")
+        users = load_credentials()
+        user_to_reset = st.selectbox("Select user", users["username"])
+        new_pw = st.text_input("New password", type="password")
+        if st.button("Reset Password"):
+            users.loc[users["username"] == user_to_reset, "password"] = hash_password(new_pw)
+            save_credentials(users)
+            st.success("Password reset successfully.")
 
-    attendance_counts = []
-    for i, row in df.iterrows():
-        present = sum([1 for d in attendance_cols if row.get(d) == "Present"])
-        percentage = (present / len(attendance_cols)) * 100 if attendance_cols else 0
-        attendance_counts.append({
-            "Name": f"{row['Name']} {row['Surname']}",
-            "Grade": row["Grade"],
-            "Area": row["Area"],
-            "Attendance (%)": round(percentage, 2)
-        })
-
-    summary_df = pd.DataFrame(attendance_counts)
-
-    st.subheader("📈 Grade-wise Summary")
-    grade_summary = summary_df.groupby("Grade").agg(
-        Total_Students=("Name", "count"),
-        Passed=("Attendance (%)", lambda x: (x >= 70).sum()),
-        Failed=("Attendance (%)", lambda x: (x < 70).sum()),
-        Avg_Attendance=("Attendance (%)", "mean")
-    ).reset_index()
-    st.dataframe(grade_summary, use_container_width=True)
-
-    st.subheader("🙋 Individual Performance")
-    st.dataframe(summary_df.sort_values(by="Grade"), use_container_width=True)
-
-# ========== MANAGE TAB ==========
-elif menu == "Manage":
-    st.header("⚙️ Manage Students")
-    for i, row in df.iterrows():
-        st.subheader(f"Student #{i+1}")
-        df.at[i, "Name"] = st.text_input(f"Name {i}", row["Name"])
-        df.at[i, "Surname"] = st.text_input(f"Surname {i}", row["Surname"])
-        df.at[i, "Grade"] = st.selectbox(f"Grade {i}", [5, 6, 7], index=[5, 6, 7].index(int(row["Grade"])))
-        df.at[i, "Area"] = st.text_input(f"Area {i}", row["Area"])
-    if st.button("💾 Save All"):
-        save_data(df)
-        st.success("All student data updated.")
-
-# ========== DOWNLOAD ==========
-st.sidebar.header("💾 Download")
-csv = df.to_csv(index=False)
-b64 = base64.b64encode(csv.encode()).decode()
-href = f'<a href="data:file/csv;base64,{b64}" download="updated_attendance.csv">Download Updated CSV</a>'
-st.sidebar.markdown(href, unsafe_allow_html=True)
