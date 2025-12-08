@@ -1,4 +1,4 @@
-# app.py — Streamlit Attendance (beautiful edition, with IN/OUT)
+# app.py — Streamlit Attendance (beautiful edition, with IN/OUT + logo)
 # Tabs: Scan • Today • History • Tracking • Manage
 
 import streamlit as st
@@ -288,17 +288,20 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Header
-left, right = st.columns([3,2])
-with left:
+# ----- Header with logo -----
+header_left, header_right = st.columns([1,5])
+with header_left:
+    # Put your logo file in the same folder as this app, e.g. "tzu_chi_logo.png"
+    st.image("tzu_chi_logo.png", width=80)
+with header_right:
     st.markdown('<div class="app-title">✅ Tutor Class Attendance Register 2025</div>', unsafe_allow_html=True)
     st.markdown(f'<p class="app-sub">Today: <b>{today_col_label()}</b></p>', unsafe_allow_html=True)
-with right:
-    st.write("")
 
 # Sidebar
 with st.sidebar:
     st.header("Settings")
+    # (Optional) also show logo in sidebar:
+    st.image("tzu_chi_logo.png", use_column_width=True)
     csv_path_str = st.text_input("CSV file path", CSV_DEFAULT, key="path_input")
     csv_path = Path(csv_path_str).expanduser()
     # log file lives next to CSV, called attendance_log.csv
