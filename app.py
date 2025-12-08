@@ -29,6 +29,11 @@ def today_labels():
     ts = now.isoformat(timespec="seconds")
     return date_col, date_str, time_str, ts
 
+def is_saturday_class_day() -> bool:
+    """Return True if today is Saturday (class day)."""
+    # Monday = 0 ... Sunday = 6 ; Saturday = 5
+    return datetime.now().weekday() == 5
+
 def next_saturday_from(last_dt: datetime | None = None) -> str:
     """Return next Saturday label from today or from provided date."""
     base = last_dt or datetime.now()
@@ -310,16 +315,19 @@ with tabs[0]:
     with c1:
         if st.button("Mark IN / OUT", use_container_width=True, key="scan_btn"):
             if scan:
-                ok, msg = mark_scan_in_out(scan, csv_path, log_path)
-                if ok:
-                    st.success(msg)
-                    st.toast("Scan recorded ✅", icon="✅")
+                if not is_saturday_class_day():
+                    st.error("Today is not a class day. Scans are only allowed on Saturdays.")
                 else:
-                    st.error(msg)
+                    ok, msg = mark_scan_in_out(scan, csv_path, log_path)
+                    if ok:
+                        st.success(msg)
+                        st.toast("Scan recorded ✅", icon="✅")
+                    else:
+                        st.error(msg)
                 st.session_state.scan_box = ""
                 st.experimental_rerun()
     with c2:
-        st.caption("First scan today = IN, next scan = OUT, then IN again, etc.")
+        st.caption("Class day is Saturday only. First scan = IN, next scan = OUT, then IN again, etc.")
 
     # Show who is currently IN today
     if csv_path.exists():
