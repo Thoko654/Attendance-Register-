@@ -326,16 +326,30 @@ st.markdown(
 .app-sub  {color: #666; margin-top: 0;}
 .stat-card {padding: 12px 16px; border: 1px solid #eee; border-radius: 12px; background: #fafafa;}
 .kpi {font-size: 28px; font-weight: 700;}
+
+/* Page background + content card */
+body {
+    background-color: #f3f4f6;
+}
+main .block-container {
+    padding-top: 1.5rem;
+}
+.section-card {
+    background: #ffffff;
+    padding: 18px 22px;
+    border-radius: 16px;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
+    margin-bottom: 1.2rem;
+}
 </style>
 """,
     unsafe_allow_html=True,
 )
 
 # ----- Header with centered, larger logo using st.image -----
-# Wider center column so it visually sits in the middle of the page
 logo_col1, logo_col2, logo_col3 = st.columns([3, 2, 3])
 with logo_col2:
-    # Increase width for a larger logo
     st.image("tzu_chi_logo.png", width=200)
 
 st.markdown(
@@ -347,10 +361,30 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# Hero pill info bar
+st.markdown(
+    """
+    <div style="
+        margin: 0 auto 1.5rem auto;
+        max-width: 900px;
+        padding: 10px 18px;
+        border-radius: 999px;
+        background: #f5f7fa;
+        border: 1px solid #e4e7ec;
+        text-align: center;
+        font-size: 14px;
+        color: #555;
+    ">
+        📚 <b>Saturday Tutor Class Attendance</b> · Scan learner barcodes to mark
+        <b>IN / OUT</b> and track participation over time.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
 # Sidebar
 with st.sidebar:
     st.header("Settings")
-    # Optional: also show logo in sidebar
     st.image("tzu_chi_logo.png", use_column_width=True)
     csv_path_str = st.text_input("CSV file path", CSV_DEFAULT, key="path_input")
     csv_path = Path(csv_path_str).expanduser()
@@ -362,6 +396,37 @@ tabs = st.tabs(["📷 Scan", "📅 Today", "📚 History", "📈 Tracking", "�
 
 # ---------- Scan Tab ----------
 with tabs[0]:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+
+    # KPI strip on Scan tab
+    if csv_path.exists():
+        df_scan = load_sheet(csv_path)
+        today_col_scan = today_col_label()
+        ensure_today_column(df_scan)
+        total_learners = len(df_scan)
+        present_today = (df_scan[today_col_scan].astype(str) == "1").sum()
+        absent_today = total_learners - present_today
+
+        k1, k2, k3 = st.columns(3)
+        with k1:
+            st.markdown(
+                f'<div class="stat-card"><b>Total learners</b>'
+                f'<div class="kpi">{total_learners}</div></div>',
+                unsafe_allow_html=True,
+            )
+        with k2:
+            st.markdown(
+                f'<div class="stat-card"><b>Present today</b>'
+                f'<div class="kpi">{present_today}</div></div>',
+                unsafe_allow_html=True,
+            )
+        with k3:
+            st.markdown(
+                f'<div class="stat-card"><b>Absent today</b>'
+                f'<div class="kpi">{absent_today}</div></div>',
+                unsafe_allow_html=True,
+            )
+
     st.subheader("Scan")
     scan = st.text_input(
         "Focus here and scan…", value="", key="scan_box", label_visibility="collapsed"
@@ -397,8 +462,12 @@ with tabs[0]:
         else:
             st.dataframe(current_in, use_container_width=True, height=260)
 
+    st.markdown('</div>', unsafe_allow_html=True)
+
 # ---------- Today Tab ----------
 with tabs[1]:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+
     st.subheader(f"Today's Attendance — {today_col_label()}")
     df = load_sheet(csv_path) if csv_path.exists() else pd.DataFrame()
     today_col = today_col_label()
@@ -467,7 +536,6 @@ with tabs[1]:
         # Quick charts
         date_cols = get_date_columns(df)
         if date_cols:
-            # Trend: number present per date
             trend = pd.DataFrame(
                 {
                     "Date": date_cols,
@@ -512,8 +580,12 @@ with tabs[1]:
     else:
         st.info("CSV not found yet. Set the path in the sidebar.")
 
+    st.markdown('</div>', unsafe_allow_html=True)
+
 # ---------- History Tab ----------
 with tabs[2]:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+
     st.subheader("History")
     if not csv_path.exists():
         st.info("CSV not found.")
@@ -562,8 +634,12 @@ with tabs[2]:
                 key="history_dl",
             )
 
+    st.markdown('</div>', unsafe_allow_html=True)
+
 # ---------- Tracking Tab ----------
 with tabs[3]:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+
     st.subheader("Tracking (per student)")
     if not csv_path.exists():
         st.info("CSV not found.")
@@ -683,8 +759,12 @@ with tabs[3]:
             else:
                 st.info("No learners after filters/search.")
 
+    st.markdown('</div>', unsafe_allow_html=True)
+
 # ---------- Manage Tab ----------
 with tabs[4]:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+
     st.subheader("Manage Learners / Barcodes")
     if not csv_path.exists():
         st.info("CSV not found.")
@@ -769,3 +849,16 @@ with tabs[4]:
                 save_sheet(df, csv_path)
                 st.success(f"Added column {ns}.")
                 st.experimental_rerun()
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------- Footer ----------
+st.markdown(
+    """
+    <hr style="margin-top:2rem; margin-bottom:0.5rem;">
+    <p style="text-align:center; font-size:12px; color:#9ca3af;">
+        “Walk each step steadily, and you will not lose your way.” – Jing Si Aphorism
+    </p>
+    """,
+    unsafe_allow_html=True,
+)
