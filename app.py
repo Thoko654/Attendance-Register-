@@ -332,7 +332,7 @@ st.markdown(
 )
 
 # ----- Header with centered logo using st.image -----
-logo_col1, logo_col2, logo_col3 = st.columns([1, 1, 1])
+logo_col1, logo_col2, logo_col3 = st.columns([2, 2, 2])
 with logo_col2:
     # Logo file must be in the same folder as app.py
     st.image("tzu_chi_logo.png", width=120)
@@ -768,3 +768,4 @@ with tabs[4]:
                 save_sheet(df, csv_path)
                 st.success(f"Added column {ns}.")
                 st.experimental_rerun()
+
