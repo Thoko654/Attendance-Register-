@@ -331,15 +331,18 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ----- Header with centered logo -----
+# ----- Header with centered logo using st.image -----
+logo_col1, logo_col2, logo_col3 = st.columns([1, 1, 1])
+with logo_col2:
+    # Logo file must be in the same folder as app.py
+    st.image("tzu_chi_logo.png", width=120)
+
 st.markdown(
-    f"""
-    <div style="text-align: center; margin-bottom: 1rem;">
-        <img src="tzu_chi_logo.png" width="120">
-        <h1 style="margin-bottom: -5px;">Tutor Class Attendance Register 2025</h1>
-        <p style="color: #666;">Today: <b>{today_col_label()}</b></p>
-    </div>
-    """,
+    "<h1 style='text-align:center; margin-bottom:-5px;'>Tutor Class Attendance Register 2025</h1>",
+    unsafe_allow_html=True,
+)
+st.markdown(
+    f"<p style='text-align:center; color:#666;'>Today: <b>{today_col_label()}</b></p>",
     unsafe_allow_html=True,
 )
 
@@ -702,7 +705,9 @@ with tabs[4]:
             hits = df
 
         st.dataframe(
-            hits[[c for c in ["Name", "Surname", "Barcode", "Grade", "Area"] if c in df.columns]],
+            hits[
+                [c for c in ["Name", "Surname", "Barcode", "Grade", "Area"] if c in df.columns]
+            ],
             use_container_width=True,
             height=300,
         )
