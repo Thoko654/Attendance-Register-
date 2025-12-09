@@ -444,10 +444,8 @@ with tabs[0]:
                         st.toast("Scan recorded ✅", icon="✅")
                     else:
                         st.error(msg)
-            # SAFER: reset input only if key exists, using dict syntax
-            if "scan_box" in st.session_state:
-                st.session_state["scan_box"] = ""
-            st.experimental_rerun()
+            # No session_state modification, no rerun
+
     with c2:
         st.caption(
             "Class day is Saturday only. First scan = IN, next scan = OUT, then IN again, etc."
