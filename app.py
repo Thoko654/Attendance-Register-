@@ -331,11 +331,12 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ----- Header with centered logo using st.image -----
-logo_col1, logo_col2, logo_col3 = st.columns([2, 2, 2])
+# ----- Header with centered, larger logo using st.image -----
+# Wider center column so it visually sits in the middle of the page
+logo_col1, logo_col2, logo_col3 = st.columns([3, 2, 3])
 with logo_col2:
-    # Logo file must be in the same folder as app.py
-    st.image("tzu_chi_logo.png", width=120)
+    # Increase width for a larger logo
+    st.image("tzu_chi_logo.png", width=200)
 
 st.markdown(
     "<h1 style='text-align:center; margin-bottom:-5px;'>Tutor Class Attendance Register 2025</h1>",
@@ -768,4 +769,3 @@ with tabs[4]:
                 save_sheet(df, csv_path)
                 st.success(f"Added column {ns}.")
                 st.experimental_rerun()
-
