@@ -65,9 +65,12 @@ def file_guard(path: Path):
 def load_sheet(csv_path: Path) -> pd.DataFrame:
     with file_guard(csv_path):
         df = pd.read_csv(csv_path, dtype=str).fillna("")
-    if "Barcode" not in df.columns: df.insert(1, "Barcode", "")
-    if "Name" not in df.columns:    df["Name"] = ""
-    if "Surname" not in df.columns: df["Surname"] = ""
+    if "Barcode" not in df.columns:
+        df.insert(1, "Barcode", "")
+    if "Name" not in df.columns:
+        df["Name"] = ""
+    if "Surname" not in df.columns:
+        df["Surname"] = ""
     return df
 
 def save_sheet(df: pd.DataFrame, csv_path: Path):
@@ -86,7 +89,7 @@ def ensure_today_column(df: pd.DataFrame) -> str:
 def label_for_row(r: pd.Series) -> str:
     name = str(r.get("Name", "")).strip()
     surname = str(r.get("Surname", "")).strip()
-    return (name + " " + surname).strip() or str(r.get("Barcode","")).strip()
+    return (name + " " + surname).strip() or str(r.get("Barcode", "")).strip()
 
 def get_date_columns(df: pd.DataFrame) -> list[str]:
     cols = []
@@ -94,18 +97,20 @@ def get_date_columns(df: pd.DataFrame) -> list[str]:
         parts = c.split("-")
         if len(parts) == 2 and parts[0].isdigit() and len(parts[0]) <= 2:
             cols.append(c)
+
     def _key(x):
         try:
             return datetime.strptime(x, "%d-%b").timetuple().tm_yday
         except Exception:
             return 999
+
     return sorted(cols, key=_key)
 
 def get_present_absent(df: pd.DataFrame, date_col: str, grade=None, area=None):
     if date_col not in df.columns:
         return df.iloc[0:0].copy(), df.copy()
 
-    filt = pd.Series([True]*len(df))
+    filt = pd.Series([True] * len(df))
     if grade and "Grade" in df.columns:
         filt &= df["Grade"].astype(str) == str(grade)
     if area and "Area" in df.columns:
@@ -113,20 +118,32 @@ def get_present_absent(df: pd.DataFrame, date_col: str, grade=None, area=None):
 
     subset = df[filt].copy()
     present = subset[subset[date_col].astype(str) == "1"]
-    absent  = subset[subset[date_col].astype(str) != "1"]
+    absent = subset[subset[date_col].astype(str) != "1"]
     return present, absent
 
 def unique_sorted(series):
-    vals = sorted([v for v in series.astype(str).unique() if v.strip() != "" and v != "nan"])
+    vals = sorted(
+        [v for v in series.astype(str).unique() if v.strip() != "" and v != "nan"]
+    )
     return ["(All)"] + vals
 
 # ---------- IN/OUT log helpers ----------
 def load_log(log_path: Path) -> pd.DataFrame:
     if not log_path.exists():
-        return pd.DataFrame(columns=["Timestamp","Date","Time","Barcode","Name","Surname","Action"])
+        return pd.DataFrame(
+            columns=[
+                "Timestamp",
+                "Date",
+                "Time",
+                "Barcode",
+                "Name",
+                "Surname",
+                "Action",
+            ]
+        )
     with file_guard(log_path):
         df = pd.read_csv(log_path, dtype=str).fillna("")
-    for col in ["Timestamp","Date","Time","Barcode","Name","Surname","Action"]:
+    for col in ["Timestamp", "Date", "Time", "Barcode", "Name", "Surname", "Action"]:
         if col not in df.columns:
             df[col] = ""
     return df
@@ -139,8 +156,8 @@ def determine_next_action(log_df: pd.DataFrame, barcode: str, date_str: str) -> 
     """Based on today’s log for this barcode, decide IN or OUT."""
     norm_b = _norm(barcode)
     today_rows = log_df[
-        (log_df["Date"] == date_str) &
-        (log_df["Barcode"].astype(str).apply(_norm) == norm_b)
+        (log_df["Date"] == date_str)
+        & (log_df["Barcode"].astype(str).apply(_norm) == norm_b)
     ]
     if today_rows.empty:
         return "IN"
@@ -150,14 +167,14 @@ def determine_next_action(log_df: pd.DataFrame, barcode: str, date_str: str) -> 
 def get_currently_in(log_df: pd.DataFrame, date_str: str) -> pd.DataFrame:
     """Who is currently IN today (last action today is IN)."""
     if log_df.empty:
-        return pd.DataFrame(columns=["Barcode","Name","Surname"])
+        return pd.DataFrame(columns=["Barcode", "Name", "Surname"])
     today = log_df[log_df["Date"] == date_str].copy()
     if today.empty:
-        return pd.DataFrame(columns=["Barcode","Name","Surname"])
-    today = today.sort_values(by=["Barcode","Timestamp"])
+        return pd.DataFrame(columns=["Barcode", "Name", "Surname"])
+    today = today.sort_values(by=["Barcode", "Timestamp"])
     last_actions = today.groupby("Barcode").tail(1)
     current_in = last_actions[last_actions["Action"].str.upper() == "IN"]
-    return current_in[["Barcode","Name","Surname"]].reset_index(drop=True)
+    return current_in[["Barcode", "Name", "Surname"]].reset_index(drop=True)
 
 def mark_scan_in_out(barcode: str, csv_path: Path, log_path: Path) -> tuple[bool, str]:
     """Handle one scan:
@@ -179,8 +196,10 @@ def mark_scan_in_out(barcode: str, csv_path: Path, log_path: Path) -> tuple[bool
 
     matches = df.index[df["Barcode"].apply(_norm) == _norm(barcode)].tolist()
     if not matches:
-        return False, ("Barcode not found in sheet. "
-                       "Add this code to the 'Barcode' column for the correct learner (Manage tab).")
+        return False, (
+            "Barcode not found in sheet. "
+            "Add this code to the 'Barcode' column for the correct learner (Manage tab)."
+        )
 
     action = determine_next_action(log_df, barcode, date_str)
 
@@ -213,7 +232,7 @@ def mark_scan_in_out(barcode: str, csv_path: Path, log_path: Path) -> tuple[bool
     msgs.append("")
     msgs.append(f"Currently IN today ({date_str}): {len(current_in)}")
     for _, r in current_in.iterrows():
-        who = (str(r['Name']).strip() + " " + str(r['Surname']).strip()).strip()
+        who = (str(r["Name"]).strip() + " " + str(r["Surname"]).strip()).strip()
         if not who:
             who = f"[{r['Barcode']}]"
         msgs.append(f"  • {who} [{r['Barcode']}]")
@@ -224,7 +243,20 @@ def mark_scan_in_out(barcode: str, csv_path: Path, log_path: Path) -> tuple[bool
 def compute_tracking(df: pd.DataFrame) -> pd.DataFrame:
     date_cols = get_date_columns(df)
     if not date_cols:
-        return pd.DataFrame(columns=["Name","Surname","Barcode","Sessions","Present","Absent","Attendance %","Last present","Current streak","Longest streak"])
+        return pd.DataFrame(
+            columns=[
+                "Name",
+                "Surname",
+                "Barcode",
+                "Sessions",
+                "Present",
+                "Absent",
+                "Attendance %",
+                "Last present",
+                "Current streak",
+                "Longest streak",
+            ]
+        )
 
     present_mat = df[date_cols].applymap(lambda x: 1 if str(x).strip() == "1" else 0)
 
@@ -262,45 +294,59 @@ def compute_tracking(df: pd.DataFrame) -> pd.DataFrame:
         current_streak.append(cur)
         longest_streak.append(lng)
 
-    result = pd.DataFrame({
-        "Name": df.get("Name",""),
-        "Surname": df.get("Surname",""),
-        "Barcode": df.get("Barcode",""),
-        "Sessions": sessions,
-        "Present": present_counts,
-        "Absent": absent_counts,
-        "Attendance %": pct,
-        "Last present": last_present,
-        "Current streak": current_streak,
-        "Longest streak": longest_streak
-    })
-    return result.sort_values(by=["Attendance %","Name","Surname"], ascending=[False, True, True]).reset_index(drop=True)
+    result = pd.DataFrame(
+        {
+            "Name": df.get("Name", ""),
+            "Surname": df.get("Surname", ""),
+            "Barcode": df.get("Barcode", ""),
+            "Sessions": sessions,
+            "Present": present_counts,
+            "Absent": absent_counts,
+            "Attendance %": pct,
+            "Last present": last_present,
+            "Current streak": current_streak,
+            "Longest streak": longest_streak,
+        }
+    )
+    return result.sort_values(
+        by=["Attendance %", "Name", "Surname"], ascending=[False, True, True]
+    ).reset_index(drop=True)
 
 # ---------- Look & Feel ----------
-st.set_page_config(page_title="Tutor Class Attendance Register 2025", page_icon="✅", layout="wide")
+st.set_page_config(
+    page_title="Tutor Class Attendance Register 2025",
+    page_icon="✅",
+    layout="wide",
+)
 
-st.markdown("""
+st.markdown(
+    """
 <style>
 .app-title {font-size: 30px; font-weight: 800; margin-bottom: .25rem;}
 .app-sub  {color: #666; margin-top: 0;}
 .stat-card {padding: 12px 16px; border: 1px solid #eee; border-radius: 12px; background: #fafafa;}
 .kpi {font-size: 28px; font-weight: 700;}
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
-# ----- Header with logo -----
-header_left, header_right = st.columns([1,5])
-with header_left:
-    # Put your logo file in the same folder as this app, e.g. "tzu_chi_logo.png"
-    st.image("tzu_chi_logo.png", width=80)
-with header_right:
-    st.markdown('<div class="app-title">✅ Tutor Class Attendance Register 2025</div>', unsafe_allow_html=True)
-    st.markdown(f'<p class="app-sub">Today: <b>{today_col_label()}</b></p>', unsafe_allow_html=True)
+# ----- Header with centered logo -----
+st.markdown(
+    f"""
+    <div style="text-align: center; margin-bottom: 1rem;">
+        <img src="tzu_chi_logo.png" width="120">
+        <h1 style="margin-bottom: -5px;">Tutor Class Attendance Register 2025</h1>
+        <p style="color: #666;">Today: <b>{today_col_label()}</b></p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 # Sidebar
 with st.sidebar:
     st.header("Settings")
-    # (Optional) also show logo in sidebar:
+    # Optional: also show logo in sidebar
     st.image("tzu_chi_logo.png", use_column_width=True)
     csv_path_str = st.text_input("CSV file path", CSV_DEFAULT, key="path_input")
     csv_path = Path(csv_path_str).expanduser()
@@ -313,8 +359,10 @@ tabs = st.tabs(["📷 Scan", "📅 Today", "📚 History", "📈 Tracking", "�
 # ---------- Scan Tab ----------
 with tabs[0]:
     st.subheader("Scan")
-    scan = st.text_input("Focus here and scan…", value="", key="scan_box", label_visibility="collapsed")
-    c1, c2 = st.columns([1,4])
+    scan = st.text_input(
+        "Focus here and scan…", value="", key="scan_box", label_visibility="collapsed"
+    )
+    c1, c2 = st.columns([1, 4])
     with c1:
         if st.button("Mark IN / OUT", use_container_width=True, key="scan_btn"):
             if scan:
@@ -330,7 +378,9 @@ with tabs[0]:
                 st.session_state.scan_box = ""
                 st.experimental_rerun()
     with c2:
-        st.caption("Class day is Saturday only. First scan = IN, next scan = OUT, then IN again, etc.")
+        st.caption(
+            "Class day is Saturday only. First scan = IN, next scan = OUT, then IN again, etc."
+        )
 
     # Show who is currently IN today
     if csv_path.exists():
@@ -354,9 +404,17 @@ with tabs[1]:
         # Filters
         fc1, fc2, fc3 = st.columns(3)
         with fc1:
-            grade_sel = st.selectbox("Filter by Grade", unique_sorted(df["Grade"]) if "Grade" in df.columns else ["(All)"], key="today_grade")
+            grade_sel = st.selectbox(
+                "Filter by Grade",
+                unique_sorted(df["Grade"]) if "Grade" in df.columns else ["(All)"],
+                key="today_grade",
+            )
         with fc2:
-            area_sel = st.selectbox("Filter by Area", unique_sorted(df["Area"]) if "Area" in df.columns else ["(All)"], key="today_area")
+            area_sel = st.selectbox(
+                "Filter by Area",
+                unique_sorted(df["Area"]) if "Area" in df.columns else ["(All)"],
+                key="today_area",
+            )
         with fc3:
             pass
 
@@ -367,45 +425,86 @@ with tabs[1]:
 
         # KPIs
         s1, s2, s3 = st.columns(3)
-        with s1: st.markdown(f'<div class="stat-card"><b>Registered</b><div class="kpi">{len(present)+len(absent)}</div></div>', unsafe_allow_html=True)
-        with s2: st.markdown(f'<div class="stat-card"><b>Present</b><div class="kpi">{len(present)}</div></div>', unsafe_allow_html=True)
-        with s3: st.markdown(f'<div class="stat-card"><b>Absent</b><div class="kpi">{len(absent)}</div></div>', unsafe_allow_html=True)
+        with s1:
+            st.markdown(
+                f'<div class="stat-card"><b>Registered</b><div class="kpi">{len(present)+len(absent)}</div></div>',
+                unsafe_allow_html=True,
+            )
+        with s2:
+            st.markdown(
+                f'<div class="stat-card"><b>Present</b><div class="kpi">{len(present)}</div></div>',
+                unsafe_allow_html=True,
+            )
+        with s3:
+            st.markdown(
+                f'<div class="stat-card"><b>Absent</b><div class="kpi">{len(absent)}</div></div>',
+                unsafe_allow_html=True,
+            )
 
         st.write("")
         cA, cB = st.columns(2)
         with cA:
             st.markdown("**Present**")
-            cols = [c for c in ["Name","Surname","Barcode",today_col,"Grade","Area"] if c in present.columns]
+            cols = [
+                c
+                for c in ["Name", "Surname", "Barcode", today_col, "Grade", "Area"]
+                if c in present.columns
+            ]
             st.dataframe(present[cols], use_container_width=True, height=360)
         with cB:
             st.markdown("**Absent**")
-            cols = [c for c in ["Name","Surname","Barcode","Grade","Area"] if c in absent.columns]
+            cols = [
+                c
+                for c in ["Name", "Surname", "Barcode", "Grade", "Area"]
+                if c in absent.columns
+            ]
             st.dataframe(absent[cols], use_container_width=True, height=360)
 
         # Quick charts
         date_cols = get_date_columns(df)
         if date_cols:
             # Trend: number present per date
-            trend = pd.DataFrame({
-                "Date": date_cols,
-                "Present": [(df[c].astype(str) == "1").sum() for c in date_cols]
-            })
+            trend = pd.DataFrame(
+                {
+                    "Date": date_cols,
+                    "Present": [
+                        (df[c].astype(str) == "1").sum() for c in date_cols
+                    ],
+                }
+            )
             st.markdown("**Attendance Trend**")
-            chart = alt.Chart(trend).mark_line(point=True).encode(
-                x=alt.X("Date:N", sort=None),
-                y="Present:Q",
-                tooltip=["Date","Present"]
-            ).properties(height=220, width="container")
+            chart = (
+                alt.Chart(trend)
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X("Date:N", sort=None),
+                    y="Present:Q",
+                    tooltip=["Date", "Present"],
+                )
+                .properties(height=220, width="container")
+            )
             st.altair_chart(chart, use_container_width=True)
 
         # Export
         exp1, exp2 = st.columns(2)
         if not present.empty:
-            exp1.download_button("Download today's PRESENT (CSV)", data=present.to_csv(index=False).encode("utf-8"),
-                                 file_name=f"present_{today_col}.csv", mime="text/csv", use_container_width=True, key="today_dl_present")
+            exp1.download_button(
+                "Download today's PRESENT (CSV)",
+                data=present.to_csv(index=False).encode("utf-8"),
+                file_name=f"present_{today_col}.csv",
+                mime="text/csv",
+                use_container_width=True,
+                key="today_dl_present",
+            )
         if not absent.empty:
-            exp2.download_button("Download today's ABSENT (CSV)", data=absent.to_csv(index=False).encode("utf-8"),
-                                 file_name=f"absent_{today_col}.csv", mime="text/csv", use_container_width=True, key="today_dl_absent")
+            exp2.download_button(
+                "Download today's ABSENT (CSV)",
+                data=absent.to_csv(index=False).encode("utf-8"),
+                file_name=f"absent_{today_col}.csv",
+                mime="text/csv",
+                use_container_width=True,
+                key="today_dl_absent",
+            )
     else:
         st.info("CSV not found yet. Set the path in the sidebar.")
 
@@ -420,14 +519,44 @@ with tabs[2]:
         if not date_cols:
             st.info("No attendance dates yet.")
         else:
-            date_sel = st.selectbox("Choose a date", list(reversed(date_cols)), key="history_date")
+            date_sel = st.selectbox(
+                "Choose a date", list(reversed(date_cols)), key="history_date"
+            )
             present, absent = get_present_absent(df, date_sel)
             st.write(f"**Present:** {len(present)}  |  **Absent:** {len(absent)}")
-            cols = [c for c in ["Name","Surname","Barcode",date_sel,"Grade","Area"] if c in df.columns]
-            st.dataframe(df[cols].sort_values(by=["Name","Surname"]), use_container_width=True, height=420)
-            st.download_button("Download this date (CSV)",
-                               data=df[[c for c in ["Name","Surname","Barcode",date_sel,"Grade","Area"] if c in df.columns]].to_csv(index=False).encode("utf-8"),
-                               file_name=f"attendance_{date_sel}.csv", mime="text/csv", use_container_width=True, key="history_dl")
+            cols = [
+                c
+                for c in ["Name", "Surname", "Barcode", date_sel, "Grade", "Area"]
+                if c in df.columns
+            ]
+            st.dataframe(
+                df[cols].sort_values(by=["Name", "Surname"]),
+                use_container_width=True,
+                height=420,
+            )
+            st.download_button(
+                "Download this date (CSV)",
+                data=df[
+                    [
+                        c
+                        for c in [
+                            "Name",
+                            "Surname",
+                            "Barcode",
+                            date_sel,
+                            "Grade",
+                            "Area",
+                        ]
+                        if c in df.columns
+                    ]
+                ]
+                .to_csv(index=False)
+                .encode("utf-8"),
+                file_name=f"attendance_{date_sel}.csv",
+                mime="text/csv",
+                use_container_width=True,
+                key="history_dl",
+            )
 
 # ---------- Tracking Tab ----------
 with tabs[3]:
@@ -442,9 +571,17 @@ with tabs[3]:
         else:
             fc1, fc2, fc3 = st.columns(3)
             with fc1:
-                grade_sel = st.selectbox("Filter by Grade", unique_sorted(df["Grade"]) if "Grade" in df.columns else ["(All)"], key="track_grade")
+                grade_sel = st.selectbox(
+                    "Filter by Grade",
+                    unique_sorted(df["Grade"]) if "Grade" in df.columns else ["(All)"],
+                    key="track_grade",
+                )
             with fc2:
-                area_sel = st.selectbox("Filter by Area", unique_sorted(df["Area"]) if "Area" in df.columns else ["(All)"], key="track_area")
+                area_sel = st.selectbox(
+                    "Filter by Area",
+                    unique_sorted(df["Area"]) if "Area" in df.columns else ["(All)"],
+                    key="track_area",
+                )
             with fc3:
                 search = st.text_input("Search name/barcode", key="track_search")
 
@@ -456,42 +593,89 @@ with tabs[3]:
             if search.strip():
                 q = search.strip().lower()
                 subset = subset[
-                    subset.apply(lambda r: q in str(r.get("Name","")).lower()
-                                          or q in str(r.get("Surname","")).lower()
-                                          or q in str(r.get("Barcode","")).lower(), axis=1)
+                    subset.apply(
+                        lambda r: q in str(r.get("Name", "")).lower()
+                        or q in str(r.get("Surname", "")).lower()
+                        or q in str(r.get("Barcode", "")).lower(),
+                        axis=1,
+                    )
                 ]
 
             metrics = compute_tracking(subset) if len(subset) else pd.DataFrame()
-            st.write(f"Total learners: **{len(metrics)}**  |  Sessions counted: **{len(date_cols)}**")
+            st.write(
+                f"Total learners: **{len(metrics)}**  |  Sessions counted: **{len(date_cols)}**"
+            )
 
             # Pretty table with progress bars
             if not metrics.empty:
                 pretty = metrics.copy()
-                pretty["Student"] = (pretty["Name"].fillna("") + " " + pretty["Surname"].fillna("")).str.strip()
-                pretty.loc[pretty["Student"] == "", "Student"] = "[" + pretty["Barcode"].fillna("") + "]"
-                pretty = pretty[["Student","Barcode","Sessions","Present","Absent","Attendance %","Current streak","Longest streak","Last present"]]
+                pretty["Student"] = (
+                    pretty["Name"].fillna("") + " " + pretty["Surname"].fillna("")
+                ).str.strip()
+                pretty.loc[pretty["Student"] == "", "Student"] = (
+                    "[" + pretty["Barcode"].fillna("") + "]"
+                )
+                pretty = pretty[
+                    [
+                        "Student",
+                        "Barcode",
+                        "Sessions",
+                        "Present",
+                        "Absent",
+                        "Attendance %",
+                        "Current streak",
+                        "Longest streak",
+                        "Last present",
+                    ]
+                ]
 
                 for _, row in pretty.iterrows():
-                    pcol1, pcol2, pcol3 = st.columns([3,3,4])
+                    pcol1, pcol2, pcol3 = st.columns([3, 3, 4])
                     with pcol1:
                         st.write(f"**{row['Student']}**")
                         st.caption(f"Barcode: {row['Barcode']}")
                     with pcol2:
-                        st.metric("Attendance %", f"{row['Attendance %']}%", f"{row['Present']}/{row['Sessions']}")
+                        st.metric(
+                            "Attendance %",
+                            f"{row['Attendance %']}%",
+                            f"{row['Present']}/{row['Sessions']}",
+                        )
                         st.progress(min(100, int(row["Attendance %"])) / 100.0)
                     with pcol3:
-                        st.caption(f"Current streak: {row['Current streak']}  |  Longest: {row['Longest streak']}")
+                        st.caption(
+                            f"Current streak: {row['Current streak']}  |  Longest: {row['Longest streak']}"
+                        )
                         st.caption(f"Last present: {row['Last present']}")
                     st.divider()
 
-                top10 = metrics.sort_values(by=["Attendance %","Current streak","Longest streak"], ascending=False).head(10)
+                top10 = metrics.sort_values(
+                    by=["Attendance %", "Current streak", "Longest streak"],
+                    ascending=False,
+                ).head(10)
                 st.markdown("**Top 10 Consistent Learners**")
-                st.dataframe(top10[["Name","Surname","Barcode","Attendance %","Current streak","Longest streak"]], use_container_width=True, height=320)
+                st.dataframe(
+                    top10[
+                        [
+                            "Name",
+                            "Surname",
+                            "Barcode",
+                            "Attendance %",
+                            "Current streak",
+                            "Longest streak",
+                        ]
+                    ],
+                    use_container_width=True,
+                    height=320,
+                )
 
-                st.download_button("Download tracking report (CSV)",
-                                   data=metrics.to_csv(index=False).encode("utf-8"),
-                                   file_name="attendance_tracking_report.csv", mime="text/csv",
-                                   use_container_width=True, key="track_dl")
+                st.download_button(
+                    "Download tracking report (CSV)",
+                    data=metrics.to_csv(index=False).encode("utf-8"),
+                    file_name="attendance_tracking_report.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    key="track_dl",
+                )
             else:
                 st.info("No learners after filters/search.")
 
@@ -507,17 +691,20 @@ with tabs[4]:
         if q:
             ql = q.lower().strip()
             hits = df[
-                df.apply(lambda r:
-                         ql in str(r.get("Name","")).lower()
-                         or ql in str(r.get("Surname","")).lower()
-                         or ql in str(r.get("Barcode","")).lower(), axis=1)
+                df.apply(
+                    lambda r: ql in str(r.get("Name", "")).lower()
+                    or ql in str(r.get("Surname", "")).lower()
+                    or ql in str(r.get("Barcode", "")).lower(),
+                    axis=1,
+                )
             ]
         else:
             hits = df
 
         st.dataframe(
-            hits[[c for c in ["Name","Surname","Barcode","Grade","Area"] if c in df.columns]],
-            use_container_width=True, height=300
+            hits[[c for c in ["Name", "Surname", "Barcode", "Grade", "Area"] if c in df.columns]],
+            use_container_width=True,
+            height=300,
         )
 
         st.markdown("---")
@@ -528,25 +715,36 @@ with tabs[4]:
         with c2:
             surname_in = st.text_input("Surname", key="manage_surname")
         with c3:
-            barcode_in = st.text_input("Barcode (keep leading zeros)", key="manage_barcode")
+            barcode_in = st.text_input(
+                "Barcode (keep leading zeros)", key="manage_barcode"
+            )
 
         if st.button("Save barcode to matching learner", key="manage_save"):
-            mask = (df["Name"].astype(str).str.strip().str.lower() == name_in.strip().lower()) & \
-                   (df["Surname"].astype(str).str.strip().str.lower() == surname_in.strip().lower())
+            mask = (
+                df["Name"].astype(str).str.strip().str.lower()
+                == name_in.strip().lower()
+            ) & (
+                df["Surname"].astype(str).str.strip().str.lower()
+                == surname_in.strip().lower()
+            )
             idx = df.index[mask].tolist()
             if not idx:
                 st.error("Learner not found. Check spelling.")
             else:
                 df.loc[idx, "Barcode"] = barcode_in.strip()
                 save_sheet(df, csv_path)
-                st.success("Saved. (Tip: in Excel, set Barcode column to Text to keep leading zeros.)")
+                st.success(
+                    "Saved. (Tip: in Excel, set Barcode column to Text to keep leading zeros.)"
+                )
                 st.experimental_rerun()
 
         st.markdown("---")
         st.markdown("**Dates**")
-        colA, colB = st.columns([2,1])
+        colA, colB = st.columns([2, 1])
         with colA:
-            new_date = st.text_input("New date label (e.g., 19-Aug)", key="manage_newdate")
+            new_date = st.text_input(
+                "New date label (e.g., 19-Aug)", key="manage_newdate"
+            )
         with colB:
             if st.button("Add date column", key="manage_adddate"):
                 if new_date.strip():
