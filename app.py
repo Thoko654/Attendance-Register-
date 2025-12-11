@@ -609,7 +609,6 @@ with tabs[2]:
                 grades = ["5", "6", "7", "8"]
                 GRADE_CAPACITY = 15  # fixed number of learners per grade
                 summary_rows = []
-                grade_pct_map = {}
                 detail_rows = []
 
                 k_cols = st.columns(len(grades))
@@ -634,7 +633,6 @@ with tabs[2]:
                         pct = 0.0
                     pct = round(pct, 1)
                     pct_str = f"{pct:.1f}%"
-                    grade_pct_map[g] = pct
 
                     # Absent compared to full capacity 15
                     absent_vs_15 = max(0, GRADE_CAPACITY - present_in_grade)
@@ -675,7 +673,7 @@ with tabs[2]:
                                 "Name": str(r.get("Name", "")),
                                 "Surname": str(r.get("Surname", "")),
                                 "Barcode": str(r.get("Barcode", "")),
-                                "Status": status,  # Present / Absent
+                                "Status": status,
                             }
                         )
 
@@ -687,8 +685,6 @@ with tabs[2]:
                 # ---- Full learner list (all grades) + download ----
                 if detail_rows:
                     detail_df = pd.DataFrame(detail_rows)
-                    # Add grade-level attendance % column
-                    detail_df["Grade attendance %"] = detail_df["Grade"].map(grade_pct_map)
 
                     st.markdown(f"**Learner list for {date_sel} (all grades)**")
                     st.dataframe(
@@ -700,7 +696,6 @@ with tabs[2]:
                                 "Surname",
                                 "Barcode",
                                 "Status",
-                                "Grade attendance %",
                             ]
                         ],
                         use_container_width=True,
@@ -715,6 +710,14 @@ with tabs[2]:
                         use_container_width=True,
                         key="grades_dl_detail",
                     )
+
+                    # Text summary under everything (no per-learner %)
+                    st.markdown("**Grade attendance summary (capacity 15 learners each)**")
+                    for row in summary_rows:
+                        st.markdown(
+                            f"- Grade {row['Grade']}: {row['Attendance %']}% "
+                            f"({row['Present']}/{row['Capacity (fixed)']} present)"
+                        )
 
     st.markdown('</div>', unsafe_allow_html=True)
 
