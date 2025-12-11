@@ -1,5 +1,5 @@
 # app.py — Streamlit Attendance (beautiful edition, with IN/OUT + logo)
-# Tabs: Scan • Today • History • Tracking • Manage
+# Tabs: Scan • Today • Grades • History • Tracking • Manage
 
 import streamlit as st
 import pandas as pd
@@ -392,7 +392,8 @@ with st.sidebar:
     log_path = csv_path.with_name("attendance_log.csv")
     st.caption("Keep this CSV in a shared OneDrive/Drive folder for team use.")
 
-tabs = st.tabs(["📷 Scan", "📅 Today", "📚 History", "📈 Tracking", "🛠 Manage"])
+# NOTE: new "🏫 Grades" tab added here
+tabs = st.tabs(["📷 Scan", "📅 Today", "🏫 Grades", "📚 History", "📈 Tracking", "🛠 Manage"])
 
 # ---------- Scan Tab ----------
 with tabs[0]:
@@ -582,8 +583,73 @@ with tabs[1]:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ---------- History Tab ----------
+# ---------- NEW: Grades Tab ----------
 with tabs[2]:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+
+    st.subheader("Grade Attendance by Saturday")
+    if not csv_path.exists():
+        st.info("CSV not found.")
+    else:
+        df = load_sheet(csv_path)
+        if "Grade" not in df.columns:
+            st.info("No 'Grade' column found in the CSV.")
+        else:
+            date_cols = get_date_columns(df)
+            if not date_cols:
+                st.info("No attendance dates yet.")
+            else:
+                # Choose Saturday (date column)
+                date_sel = st.selectbox(
+                    "Choose a Saturday",
+                    list(reversed(date_cols)),
+                    key="grade_date",
+                )
+
+                grades = ["5", "6", "7", "8"]
+                summary_rows = []
+                k_cols = st.columns(len(grades))
+
+                for i, g in enumerate(grades):
+                    mask_grade = df["Grade"].astype(str) == g
+                    total_in_grade = mask_grade.sum()
+
+                    if date_sel in df.columns:
+                        present_in_grade = (
+                            df.loc[mask_grade, date_sel].astype(str) == "1"
+                        ).sum()
+                    else:
+                        present_in_grade = 0
+
+                    absent_in_grade = total_in_grade - present_in_grade
+
+                    summary_rows.append(
+                        {
+                            "Grade": g,
+                            "Total learners": int(total_in_grade),
+                            "Present": int(present_in_grade),
+                            "Absent": int(absent_in_grade),
+                        }
+                    )
+
+                    with k_cols[i]:
+                        st.markdown(
+                            f'<div class="stat-card"><b>Grade {g}</b>'
+                            f'<div class="kpi">{present_in_grade}/{total_in_grade}</div>'
+                            f'<div style="font-size:12px;color:#555;">Present / Total</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+                st.write("")
+                st.markdown(f"**Summary for {date_sel}**")
+                summary_df = pd.DataFrame(summary_rows)
+                st.dataframe(summary_df, use_container_width=True, height=220)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ---------- History Tab ----------
+with tabs[3]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
 
     st.subheader("History")
@@ -637,7 +703,7 @@ with tabs[2]:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------- Tracking Tab ----------
-with tabs[3]:
+with tabs[4]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
 
     st.subheader("Tracking (per student)")
@@ -762,7 +828,7 @@ with tabs[3]:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ---------- Manage Tab ----------
-with tabs[4]:
+with tabs[5]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
 
     st.subheader("Manage Learners / Barcodes")
