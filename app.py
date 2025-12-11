@@ -392,7 +392,7 @@ with st.sidebar:
     log_path = csv_path.with_name("attendance_log.csv")
     st.caption("Keep this CSV in a shared OneDrive/Drive folder for team use.")
 
-# NOTE: new "🏫 Grades" tab added here
+# Tabs
 tabs = st.tabs(["📷 Scan", "📅 Today", "🏫 Grades", "📚 History", "📈 Tracking", "🛠 Manage"])
 
 # ---------- Scan Tab ----------
@@ -607,13 +607,15 @@ with tabs[2]:
                 )
 
                 grades = ["5", "6", "7", "8"]
+                GRADE_CAPACITY = 15  # fixed number of learners per grade
                 summary_rows = []
                 k_cols = st.columns(len(grades))
 
                 for i, g in enumerate(grades):
+                    # Filter this grade
                     mask_grade = df["Grade"].astype(str) == g
-                    total_in_grade = mask_grade.sum()
 
+                    # How many actually present for the selected date
                     if date_sel in df.columns:
                         present_in_grade = (
                             df.loc[mask_grade, date_sel].astype(str) == "1"
@@ -621,30 +623,45 @@ with tabs[2]:
                     else:
                         present_in_grade = 0
 
-                    absent_in_grade = total_in_grade - present_in_grade
+                    # Percentage based on fixed capacity of 15 learners
+                    if GRADE_CAPACITY > 0:
+                        pct = present_in_grade / GRADE_CAPACITY * 100
+                    else:
+                        pct = 0.0
+                    pct_str = f"{pct:.1f}%"
+
+                    # Absent compared to full capacity 15
+                    absent_vs_15 = max(0, GRADE_CAPACITY - present_in_grade)
 
                     summary_rows.append(
                         {
                             "Grade": g,
-                            "Total learners": int(total_in_grade),
+                            "Capacity (fixed)": GRADE_CAPACITY,
                             "Present": int(present_in_grade),
-                            "Absent": int(absent_in_grade),
+                            "Absent (vs 15)": int(absent_vs_15),
+                            "Attendance %": round(pct, 1),
                         }
                     )
 
+                    # KPI card per grade
                     with k_cols[i]:
                         st.markdown(
-                            f'<div class="stat-card"><b>Grade {g}</b>'
-                            f'<div class="kpi">{present_in_grade}/{total_in_grade}</div>'
-                            f'<div style="font-size:12px;color:#555;">Present / Total</div>'
-                            f'</div>',
+                            f'''
+                            <div class="stat-card">
+                                <b>Grade {g}</b>
+                                <div class="kpi">{pct_str}</div>
+                                <div style="font-size:12px;color:#555;">
+                                    Present: {present_in_grade} / {GRADE_CAPACITY}
+                                </div>
+                            </div>
+                            ''',
                             unsafe_allow_html=True,
                         )
 
                 st.write("")
                 st.markdown(f"**Summary for {date_sel}**")
                 summary_df = pd.DataFrame(summary_rows)
-                st.dataframe(summary_df, use_container_width=True, height=220)
+                st.dataframe(summary_df, use_container_width=True, height=260)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
