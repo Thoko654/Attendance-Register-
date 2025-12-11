@@ -609,16 +609,20 @@ with tabs[2]:
                 grades = ["5", "6", "7", "8"]
                 GRADE_CAPACITY = 15  # fixed number of learners per grade
                 summary_rows = []
+                grade_pct_map = {}
+                detail_rows = []
+
                 k_cols = st.columns(len(grades))
 
                 for i, g in enumerate(grades):
                     # Filter this grade
                     mask_grade = df["Grade"].astype(str) == g
+                    grade_df = df.loc[mask_grade].copy()
 
                     # How many actually present for the selected date
                     if date_sel in df.columns:
                         present_in_grade = (
-                            df.loc[mask_grade, date_sel].astype(str) == "1"
+                            grade_df[date_sel].astype(str) == "1"
                         ).sum()
                     else:
                         present_in_grade = 0
@@ -628,7 +632,9 @@ with tabs[2]:
                         pct = present_in_grade / GRADE_CAPACITY * 100
                     else:
                         pct = 0.0
+                    pct = round(pct, 1)
                     pct_str = f"{pct:.1f}%"
+                    grade_pct_map[g] = pct
 
                     # Absent compared to full capacity 15
                     absent_vs_15 = max(0, GRADE_CAPACITY - present_in_grade)
@@ -639,7 +645,7 @@ with tabs[2]:
                             "Capacity (fixed)": GRADE_CAPACITY,
                             "Present": int(present_in_grade),
                             "Absent (vs 15)": int(absent_vs_15),
-                            "Attendance %": round(pct, 1),
+                            "Attendance %": pct,
                         }
                     )
 
@@ -658,10 +664,57 @@ with tabs[2]:
                             unsafe_allow_html=True,
                         )
 
+                    # ---- Detailed learner rows for this grade ----
+                    for _, r in grade_df.iterrows():
+                        present_flag = str(r.get(date_sel, "")).strip() == "1"
+                        status = "Present" if present_flag else "Absent"
+                        detail_rows.append(
+                            {
+                                "Date": date_sel,
+                                "Grade": str(g),
+                                "Name": str(r.get("Name", "")),
+                                "Surname": str(r.get("Surname", "")),
+                                "Barcode": str(r.get("Barcode", "")),
+                                "Status": status,  # Present / Absent
+                            }
+                        )
+
                 st.write("")
                 st.markdown(f"**Summary for {date_sel}**")
                 summary_df = pd.DataFrame(summary_rows)
                 st.dataframe(summary_df, use_container_width=True, height=260)
+
+                # ---- Full learner list (all grades) + download ----
+                if detail_rows:
+                    detail_df = pd.DataFrame(detail_rows)
+                    # Add grade-level attendance % column
+                    detail_df["Grade attendance %"] = detail_df["Grade"].map(grade_pct_map)
+
+                    st.markdown(f"**Learner list for {date_sel} (all grades)**")
+                    st.dataframe(
+                        detail_df[
+                            [
+                                "Date",
+                                "Grade",
+                                "Name",
+                                "Surname",
+                                "Barcode",
+                                "Status",
+                                "Grade attendance %",
+                            ]
+                        ],
+                        use_container_width=True,
+                        height=320,
+                    )
+
+                    st.download_button(
+                        "Download detailed grade report (CSV)",
+                        data=detail_df.to_csv(index=False).encode("utf-8"),
+                        file_name=f"grade_attendance_{date_sel}.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                        key="grades_dl_detail",
+                    )
 
     st.markdown('</div>', unsafe_allow_html=True)
 
