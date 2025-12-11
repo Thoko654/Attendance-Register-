@@ -662,7 +662,7 @@ with tabs[2]:
                             unsafe_allow_html=True,
                         )
 
-                    # ---- Detailed learner rows for this grade ----
+                    # Detailed learner rows for this grade
                     for _, r in grade_df.iterrows():
                         present_flag = str(r.get(date_sel, "")).strip() == "1"
                         status = "Present" if present_flag else "Absent"
@@ -682,7 +682,7 @@ with tabs[2]:
                 summary_df = pd.DataFrame(summary_rows)
                 st.dataframe(summary_df, use_container_width=True, height=260)
 
-                # ---- Full learner list (all grades) + download ----
+                # Full learner list (all grades)
                 if detail_rows:
                     detail_df = pd.DataFrame(detail_rows)
 
@@ -702,16 +702,48 @@ with tabs[2]:
                         height=320,
                     )
 
+                    # ---------- COMBINED CSV (summary + learner info) ----------
+                    # Map grade-level summary onto each learner row
+                    export_df = detail_df.merge(
+                        summary_df[
+                            [
+                                "Grade",
+                                "Capacity (fixed)",
+                                "Present",
+                                "Absent (vs 15)",
+                                "Attendance %",
+                            ]
+                        ],
+                        on="Grade",
+                        how="left",
+                    )
+
+                    # Reorder columns for nicer Excel editing
+                    export_df = export_df[
+                        [
+                            "Date",
+                            "Grade",
+                            "Capacity (fixed)",
+                            "Present",
+                            "Absent (vs 15)",
+                            "Attendance %",
+                            "Name",
+                            "Surname",
+                            "Barcode",
+                            "Status",
+                        ]
+                    ]
+
                     st.download_button(
-                        "Download detailed grade report (CSV)",
-                        data=detail_df.to_csv(index=False).encode("utf-8"),
+                        "Download grade summary + learner list (CSV)",
+                        data=export_df.to_csv(index=False).encode("utf-8"),
                         file_name=f"grade_attendance_{date_sel}.csv",
                         mime="text/csv",
                         use_container_width=True,
                         key="grades_dl_detail",
                     )
 
-                    # Text summary under everything (no per-learner %)
+                    # Text summary under everything
                     st.markdown("**Grade attendance summary (capacity 15 learners each)**")
                     for row in summary_rows:
                         st.markdown(
