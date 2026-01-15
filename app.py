@@ -505,24 +505,38 @@ with tabs[0]:
             )
 
     st.subheader("Scan")
-    scan = st.text_input(
-        "Focus here and scan…", value="", key="scan_box", label_visibility="collapsed"
+
+    # 🔁 This function runs automatically whenever a barcode is scanned
+    def handle_scan():
+        scan_value = st.session_state.get("scan_box", "").strip()
+        if not scan_value:
+            return
+
+        if not is_saturday_class_day():
+            st.error("Today is not a class day. Scans are only allowed on Saturdays.")
+        else:
+            ok, msg = mark_scan_in_out(scan_value, csv_path, log_path)
+            if ok:
+                st.success(msg)
+                st.toast("Scan recorded ✅", icon="✅")
+            else:
+                st.error(msg)
+
+        # Clear the box ready for the next scan
+        st.session_state["scan_box"] = ""
+
+    # When the scanner types the code + Enter, handle_scan() is called
+    st.text_input(
+        "Focus here and scan…",
+        value=st.session_state.get("scan_box", ""),
+        key="scan_box",
+        label_visibility="collapsed",
+        on_change=handle_scan,
     )
+
     c1, c2 = st.columns([1, 4])
     with c1:
-        if st.button("Mark IN / OUT", use_container_width=True, key="scan_btn"):
-            if scan:
-                if not is_saturday_class_day():
-                    st.error("Today is not a class day. Scans are only allowed on Saturdays.")
-                else:
-                    ok, msg = mark_scan_in_out(scan, csv_path, log_path)
-                    if ok:
-                        st.success(msg)
-                        st.toast("Scan recorded ✅", icon="✅")
-                    else:
-                        st.error(msg)
-            # No session_state modification, no rerun
-
+        st.caption("Click in the box once, then scan each learner’s barcode.")
     with c2:
         st.caption(
             "Class day is Saturday only. First scan = IN, next scan = OUT, then IN again, etc."
