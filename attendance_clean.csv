@@ -11,7 +11,7 @@
 10,0010,Onalerona,Phala,,Girl,5,Klipfontein,26-Aug-14,
 11,0011,Phetogo,Motsisi,,Girl,5,Primrose,12-Aug-14,
 12,0012,Teesetso,Moseamedi,Triture,Girl,5,Primrose,5-Feb-15,
-13,0013,Tshegofatso,Makhafula,,Boy,5,Olieven,13-Nov,2014
+13,0013,Tshegofatso,Makhafula,,Boy,5,Olieven,13-Nov,2014,
 14,0014,Zezethu,Belekane,,Girl,5,Ivory Park,17-Jan-15,
 15,0015,Pule,Visagie,,Boy,5,Windmill,2-Dec-12,
 16,0016,Alica,Chauke,,Girl,6,Phomolong,7-Aug-13,
@@ -40,7 +40,7 @@
 39,0043,Samkelo,Mahlangu,Daniel,Boy,7,Olieven,12-Nov-11,
 40,0045,Snethemba,Msiza,,Boy,7,Olieven,6-Jun-13,
 41,0046,Thabiso,Monaheng,,Boy,7,Windmill,9-Sep-10,
-42,0047,Tshephang,Mokumo,Ephraim,Boy,7,Klipfontein,12-Feb--2013,
+42,0047,Tshephang,Mokumo,Ephraim,Boy,7,Klipfontein,12-Feb-2013,
 43,0048,Tshepo,Mofokeng,Owandile,Boy,7,Lion Park,20-Nov-11,
 44,0053,Andile,Mashiane,Prince,Boy,5,Primrose,8-Sep-15,
 45,0054,Luthando,Ncube,Clara,Girl,5,Olieven,24-Sep-15,
@@ -53,3 +53,4 @@
 52,0061,Gift,Mashitelo,,Boy,7,Lion Park,25-Jan-14,
 53,0062,Phiwokuhle,Macwili,Cwenga,Boy,7,Primrose,21-Feb-14,
 54,0063,Abigail,Sibanda,,Girl,7,Oliven,6-Jun-11,
+
