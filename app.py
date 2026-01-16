@@ -8,9 +8,6 @@ from pathlib import Path
 from contextlib import contextmanager
 import time
 import altair as alt
-import os
-import smtplib
-from email.message import EmailMessage
 
 CSV_DEFAULT = "attendance_clean.csv"
 
@@ -26,7 +23,7 @@ def today_labels():
     now = datetime.now()
     day = str(int(now.strftime("%d")))
     mon = now.strftime("%b")
-    date_col = f"{day}-{mon}"          # for sheet columns
+    date_col = f"{day}-{mon}"           # for sheet columns
     date_str = now.strftime("%Y-%m-%d") # for logs
     time_str = now.strftime("%H:%M:%S")
     ts = now.isoformat(timespec="seconds")
@@ -315,101 +312,81 @@ def compute_tracking(df: pd.DataFrame) -> pd.DataFrame:
         by=["Attendance %", "Name", "Surname"], ascending=[False, True, True]
     ).reset_index(drop=True)
 
-# ---------- Birthday helpers ----------
-def parse_dob(dob_str: str):
-    """Parse 'Date Of Birth' cell into a date object.
-       Expected formats: '5-Mar-14' or '05-Mar-2014'.
+# ---------- NEW: Grades report helper ----------
+def build_grades_export(df: pd.DataFrame, date_sel: str, grades: list[str], grade_capacity: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    dob_str = dob_str.strip()
-    if not dob_str:
-        return None
-    for fmt in ("%d-%b-%y", "%d-%b-%Y", "%d/%m/%Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(dob_str, fmt).date()
-        except ValueError:
-            continue
-    return None
-
-def get_birthdays_for_week(df: pd.DataFrame, today: datetime | None = None):
-    """Return list of dicts with birthdays for:
-       - today (exact day/month)
-       - last 6 days  -> belated
-       - next 7 days  -> upcoming
+    Returns:
+      summary_df: one row per grade
+      combined_export_df: ONE CSV table that includes BOTH summary + learner list, using a Section column
     """
-    if "Date Of Birth" not in df.columns:
-        return []
-
-    if today is None:
-        today = datetime.now().date()
-
-    week_start = today - timedelta(days=6)   # last 6 days + today = 7-day window
-    upcoming_end = today + timedelta(days=7)
-
-    results = []
-    for _, r in df.iterrows():
-        dob_str = str(r.get("Date Of Birth", "")).strip()
-        dob = parse_dob(dob_str)
-        if not dob:
-            continue
-
-        # Use only month/day, put it in this year
-        birthday_this_year = dob.replace(year=today.year)
-
-        if birthday_this_year == today:
-            kind = "today"
-        elif week_start <= birthday_this_year < today:
-            kind = "belated"
-        elif today < birthday_this_year <= upcoming_end:
-            kind = "upcoming"
+    summary_rows = []
+    for g in grades:
+        mask_grade = df["Grade"].astype(str) == g
+        if date_sel in df.columns:
+            present_in_grade = (df.loc[mask_grade, date_sel].astype(str) == "1").sum()
         else:
-            continue
+            present_in_grade = 0
 
-        results.append(
+        pct = (present_in_grade / grade_capacity * 100) if grade_capacity else 0.0
+        absent_vs_cap = max(0, grade_capacity - int(present_in_grade))
+
+        summary_rows.append(
             {
-                "Name": str(r.get("Name", "")),
-                "Surname": str(r.get("Surname", "")),
-                "Grade": str(r.get("Grade", "")),
-                "Barcode": str(r.get("Barcode", "")),
-                "DOB": dob_str,
-                "Kind": kind,
+                "Section": "SUMMARY",
+                "Date": date_sel,
+                "Grade": g,
+                "Capacity (fixed)": int(grade_capacity),
+                "Present": int(present_in_grade),
+                "Absent (vs capacity)": int(absent_vs_cap),
+                "Attendance %": round(pct, 1),
+                "Name": "",
+                "Surname": "",
+                "Barcode": "",
+                "Status": "",
             }
         )
-    return results
 
-# ---------- Email helper (birthday notifications) ----------
-def send_birthday_email(recipients, subject, body) -> bool:
-    """
-    recipients: list of email strings
-    subject: email subject
-    body: email body text
-    Returns True if sent, False otherwise.
-    """
-    recipients = [r.strip() for r in recipients if r.strip()]
-    if not recipients:
-        st.error("No email recipients provided.")
-        return False
+    summary_df = pd.DataFrame(summary_rows)
 
-    EMAIL_ADDRESS = os.environ.get("SENDER_EMAIL")
-    EMAIL_PASSWORD = os.environ.get("SENDER_PASSWORD")
+    # Learner list (all grades) for that date
+    learners = df.copy()
+    learners["Date"] = date_sel
+    learners["Grade"] = learners.get("Grade", "").astype(str)
+    learners["Name"] = learners.get("Name", "").astype(str)
+    learners["Surname"] = learners.get("Surname", "").astype(str)
+    learners["Barcode"] = learners.get("Barcode", "").astype(str)
 
-    if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
-        st.error("Email credentials missing (SENDER_EMAIL / SENDER_PASSWORD).")
-        return False
+    if date_sel in learners.columns:
+        learners["Status"] = learners[date_sel].astype(str).apply(lambda x: "Present" if x.strip() == "1" else "Absent")
+    else:
+        learners["Status"] = "Absent"
 
-    msg = EmailMessage()
-    msg["From"] = EMAIL_ADDRESS
-    msg["To"] = ", ".join(recipients)  # send to MANY people at once
-    msg["Subject"] = subject
-    msg.set_content(body)
+    learners_export = learners[["Date", "Grade", "Name", "Surname", "Barcode", "Status"]].copy()
+    learners_export.insert(0, "Section", "LEARNERS")
 
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-            smtp.send_message(msg)
-        return True
-    except Exception as e:
-        st.error(f"Failed to send email: {e}")
-        return False
+    # Make columns match (one CSV)
+    export_cols = [
+        "Section",
+        "Date",
+        "Grade",
+        "Capacity (fixed)",
+        "Present",
+        "Absent (vs capacity)",
+        "Attendance %",
+        "Name",
+        "Surname",
+        "Barcode",
+        "Status",
+    ]
+    # Add missing cols to learners_export
+    for c in export_cols:
+        if c not in learners_export.columns:
+            learners_export[c] = ""
+    learners_export = learners_export[export_cols]
+
+    combined_export_df = pd.concat([summary_df[export_cols], learners_export], ignore_index=True)
+
+    return summary_df.drop(columns=["Section", "Name", "Surname", "Barcode", "Status"]), combined_export_df
 
 # ---------- Look & Feel ----------
 st.set_page_config(
@@ -452,7 +429,7 @@ with logo_col2:
     st.image("tzu_chi_logo.png", width=200)
 
 st.markdown(
-    "<h1 style='text-align:center; margin-bottom:-5px;'>Tutor Class Attendance Register 2025</h1>",
+    "<h1 style='text-align:center; margin-bottom:-5px;'>Tutor Class Attendance Register 2026</h1>",
     unsafe_allow_html=True,
 )
 st.markdown(
@@ -528,24 +505,38 @@ with tabs[0]:
             )
 
     st.subheader("Scan")
-    scan = st.text_input(
-        "Focus here and scan…", value="", key="scan_box", label_visibility="collapsed"
+
+    # 🔁 This function runs automatically whenever a barcode is scanned
+    def handle_scan():
+        scan_value = st.session_state.get("scan_box", "").strip()
+        if not scan_value:
+            return
+
+        if not is_saturday_class_day():
+            st.error("Today is not a class day. Scans are only allowed on Saturdays.")
+        else:
+            ok, msg = mark_scan_in_out(scan_value, csv_path, log_path)
+            if ok:
+                st.success(msg)
+                st.toast("Scan recorded ✅", icon="✅")
+            else:
+                st.error(msg)
+
+        # Clear the box ready for the next scan
+        st.session_state["scan_box"] = ""
+
+    # When the scanner types the code + Enter, handle_scan() is called
+    st.text_input(
+        "Focus here and scan…",
+        value=st.session_state.get("scan_box", ""),
+        key="scan_box",
+        label_visibility="collapsed",
+        on_change=handle_scan,
     )
+
     c1, c2 = st.columns([1, 4])
     with c1:
-        if st.button("Mark IN / OUT", use_container_width=True, key="scan_btn"):
-            if scan:
-                if not is_saturday_class_day():
-                    st.error("Today is not a class day. Scans are only allowed on Saturdays.")
-                else:
-                    ok, msg = mark_scan_in_out(scan, csv_path, log_path)
-                    if ok:
-                        st.success(msg)
-                        st.toast("Scan recorded ✅", icon="✅")
-                    else:
-                        st.error(msg)
-            # No session_state modification, no rerun
-
+        st.caption("Click in the box once, then scan each learner’s barcode.")
     with c2:
         st.caption(
             "Class day is Saturday only. First scan = IN, next scan = OUT, then IN again, etc."
@@ -573,24 +564,6 @@ with tabs[1]:
     today_col = today_col_label()
     if not df.empty:
         ensure_today_column(df)
-
-        # 🎂 Birthday banner (for this week + upcoming)
-        birthdays = get_birthdays_for_week(df)
-        if birthdays:
-            st.markdown("### 🎂 Birthdays around this week")
-            for b in birthdays:
-                full_name = f"{b['Name']} {b['Surname']}".strip()
-                grade = b.get("Grade", "")
-                if b["Kind"] == "today":
-                    msg = "🎉 **Happy Birthday**"
-                elif b["Kind"] == "belated":
-                    msg = "🎂 **Happy belated birthday**"
-                else:
-                    msg = "🎁 **Upcoming birthday**"
-                extra = f" (Grade {grade})" if grade else ""
-                st.markdown(f"- {msg}, {full_name}{extra} – DOB: {b['DOB']}")
-        else:
-            st.caption("No birthdays this week or upcoming within 7 days.")
 
         # Filters
         fc1, fc2, fc3 = st.columns(3)
@@ -657,9 +630,7 @@ with tabs[1]:
             trend = pd.DataFrame(
                 {
                     "Date": date_cols,
-                    "Present": [
-                        (df[c].astype(str) == "1").sum() for c in date_cols
-                    ],
+                    "Present": [(df[c].astype(str) == "1").sum() for c in date_cols],
                 }
             )
             st.markdown("**Attendance Trend**")
@@ -700,7 +671,7 @@ with tabs[1]:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ---------- NEW: Grades Tab ----------
+# ---------- Grades Tab ----------
 with tabs[2]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
 
@@ -716,7 +687,6 @@ with tabs[2]:
             if not date_cols:
                 st.info("No attendance dates yet.")
             else:
-                # Choose Saturday (date column)
                 date_sel = st.selectbox(
                     "Choose a Saturday",
                     list(reversed(date_cols)),
@@ -725,48 +695,18 @@ with tabs[2]:
 
                 grades = ["5", "6", "7", "8"]
                 GRADE_CAPACITY = 15  # fixed number of learners per grade
-                summary_rows = []
-                grade_pct_map = {}
-                detail_rows = []
 
+                # Build summary + one combined export CSV
+                summary_df, combined_export_df = build_grades_export(
+                    df=df, date_sel=date_sel, grades=grades, grade_capacity=GRADE_CAPACITY
+                )
+
+                # KPI cards per grade (from summary_df)
                 k_cols = st.columns(len(grades))
-
                 for i, g in enumerate(grades):
-                    # Filter this grade
-                    mask_grade = df["Grade"].astype(str) == g
-                    grade_df = df.loc[mask_grade].copy()
-
-                    # How many actually present for the selected date
-                    if date_sel in df.columns:
-                        present_in_grade = (
-                            grade_df[date_sel].astype(str) == "1"
-                        ).sum()
-                    else:
-                        present_in_grade = 0
-
-                    # Percentage based on fixed capacity of 15 learners
-                    if GRADE_CAPACITY > 0:
-                        pct = present_in_grade / GRADE_CAPACITY * 100
-                    else:
-                        pct = 0.0
-                    pct = round(pct, 1)
-                    pct_str = f"{pct:.1f}%"
-                    grade_pct_map[g] = pct
-
-                    # Absent compared to full capacity 15
-                    absent_vs_15 = max(0, GRADE_CAPACITY - present_in_grade)
-
-                    summary_rows.append(
-                        {
-                            "Grade": g,
-                            "Capacity (fixed)": GRADE_CAPACITY,
-                            "Present": int(present_in_grade),
-                            "Absent (vs 15)": int(absent_vs_15),
-                            "Attendance %": pct,
-                        }
-                    )
-
-                    # KPI card per grade
+                    row = summary_df[summary_df["Grade"].astype(str) == g].iloc[0]
+                    pct_str = f"{float(row['Attendance %']):.1f}%"
+                    present_in_grade = int(row["Present"])
                     with k_cols[i]:
                         st.markdown(
                             f'''
@@ -781,93 +721,28 @@ with tabs[2]:
                             unsafe_allow_html=True,
                         )
 
-                    # ---- Detailed learner rows for this grade ----
-                    for _, r in grade_df.iterrows():
-                        present_flag = str(r.get(date_sel, "")).strip() == "1"
-                        status = "Present" if present_flag else "Absent"
-                        detail_rows.append(
-                            {
-                                "Date": date_sel,
-                                "Grade": str(g),
-                                "Name": str(r.get("Name", "")),
-                                "Surname": str(r.get("Surname", "")),
-                                "Barcode": str(r.get("Barcode", "")),
-                                "Status": status,  # Present / Absent
-                            }
-                        )
-
                 st.write("")
                 st.markdown(f"**Summary for {date_sel}**")
-                summary_df = pd.DataFrame(summary_rows)
                 st.dataframe(summary_df, use_container_width=True, height=260)
 
-                # ---- Full learner list (all grades) + download ----
-                if detail_rows:
-                    detail_df = pd.DataFrame(detail_rows)
-                    # Add grade-level attendance % column
-                    detail_df["Grade attendance %"] = detail_df["Grade"].map(grade_pct_map)
+                # Learner list (all grades) with Present/Absent ONLY (no percentage per learner)
+                learners_view = combined_export_df[combined_export_df["Section"] == "LEARNERS"].copy()
+                learners_view = learners_view[["Date", "Grade", "Name", "Surname", "Barcode", "Status"]]
+                st.write("")
+                st.markdown(f"**Learner list for {date_sel} (all grades)**")
+                st.dataframe(learners_view, use_container_width=True, height=360)
 
-                    st.markdown(f"**Learner list for {date_sel} (all grades)**")
-                    st.dataframe(
-                        detail_df[
-                            [
-                                "Date",
-                                "Grade",
-                                "Name",
-                                "Surname",
-                                "Barcode",
-                                "Status",
-                                "Grade attendance %",
-                            ]
-                        ],
-                        use_container_width=True,
-                        height=320,
-                    )
-
-                    st.download_button(
-                        "Download grade summary + learner list (CSV)",
-                        data=detail_df.to_csv(index=False).encode("utf-8"),
-                        file_name=f"grade_attendance_{date_sel}.csv",
-                        mime="text/csv",
-                        use_container_width=True,
-                        key="grades_dl_detail",
-                    )
-
-                # ---- Birthday email from Grades tab ----
-                st.markdown("---")
-                st.markdown("### 🎂 Birthday email summary")
-                email_input = st.text_input(
-                    "Send birthday summary to (comma-separated emails)",
-                    value="",
-                    key="grades_bday_emails",
+                # ✅ ONE download: summary + learners in ONE CSV file
+                st.download_button(
+                    "Download FULL grade report (Summary + Learners) — ONE CSV",
+                    data=combined_export_df.to_csv(index=False).encode("utf-8"),
+                    file_name=f"grade_report_{date_sel}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    key="grades_dl_full",
                 )
-                if st.button("Send this week's birthday email", key="grades_bday_btn"):
-                    birthdays = get_birthdays_for_week(df)
-                    if not birthdays:
-                        st.info("No birthdays this week or upcoming within 7 days.")
-                    else:
-                        lines = []
-                        for b in birthdays:
-                            full_name = f"{b['Name']} {b['Surname']}".strip()
-                            grade = b.get("Grade", "")
-                            kind = b["Kind"]
-                            if kind == "today":
-                                label = "Today"
-                            elif kind == "belated":
-                                label = "Belated (this week)"
-                            else:
-                                label = "Upcoming (next 7 days)"
-                            lines.append(
-                                f"{label}: {full_name} (Grade {grade}) – DOB {b['DOB']} – Barcode {b['Barcode']}"
-                            )
-                        body = "Tutor Class Birthdays Summary\n\n" + "\n".join(lines)
-                        recipients = [x.strip() for x in email_input.split(",")]
-                        if send_birthday_email(
-                            recipients,
-                            subject="Tutor Class – Birthdays around this week 🎂",
-                            body=body,
-                        ):
-                            st.success("Birthday email sent.")
+
+                st.caption("Tip: In Excel/Google Sheets, filter the 'Section' column to view SUMMARY or LEARNERS.")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -902,18 +777,7 @@ with tabs[3]:
             st.download_button(
                 "Download this date (CSV)",
                 data=df[
-                    [
-                        c
-                        for c in [
-                            "Name",
-                            "Surname",
-                            "Barcode",
-                            date_sel,
-                            "Grade",
-                            "Area",
-                        ]
-                        if c in df.columns
-                    ]
+                    [c for c in ["Name", "Surname", "Barcode", date_sel, "Grade", "Area"] if c in df.columns]
                 ]
                 .to_csv(index=False)
                 .encode("utf-8"),
@@ -975,7 +839,6 @@ with tabs[4]:
                 f"Total learners: **{len(metrics)}**  |  Sessions counted: **{len(date_cols)}**"
             )
 
-            # Pretty table with progress bars
             if not metrics.empty:
                 pretty = metrics.copy()
                 pretty["Student"] = (
@@ -1075,9 +938,7 @@ with tabs[5]:
             hits = df
 
         st.dataframe(
-            hits[
-                [c for c in ["Name", "Surname", "Barcode", "Grade", "Area"] if c in df.columns]
-            ],
+            hits[[c for c in ["Name", "Surname", "Barcode", "Grade", "Area"] if c in df.columns]],
             use_container_width=True,
             height=300,
         )
@@ -1090,17 +951,13 @@ with tabs[5]:
         with c2:
             surname_in = st.text_input("Surname", key="manage_surname")
         with c3:
-            barcode_in = st.text_input(
-                "Barcode (keep leading zeros)", key="manage_barcode"
-            )
+            barcode_in = st.text_input("Barcode (keep leading zeros)", key="manage_barcode")
 
         if st.button("Save barcode to matching learner", key="manage_save"):
             mask = (
-                df["Name"].astype(str).str.strip().str.lower()
-                == name_in.strip().lower()
+                df["Name"].astype(str).str.strip().str.lower() == name_in.strip().lower()
             ) & (
-                df["Surname"].astype(str).str.strip().str.lower()
-                == surname_in.strip().lower()
+                df["Surname"].astype(str).str.strip().str.lower() == surname_in.strip().lower()
             )
             idx = df.index[mask].tolist()
             if not idx:
@@ -1108,18 +965,14 @@ with tabs[5]:
             else:
                 df.loc[idx, "Barcode"] = barcode_in.strip()
                 save_sheet(df, csv_path)
-                st.success(
-                    "Saved. (Tip: in Excel, set Barcode column to Text to keep leading zeros.)"
-                )
+                st.success("Saved. (Tip: in Excel, set Barcode column to Text to keep leading zeros.)")
                 st.experimental_rerun()
 
         st.markdown("---")
         st.markdown("**Dates**")
         colA, colB = st.columns([2, 1])
         with colA:
-            new_date = st.text_input(
-                "New date label (e.g., 19-Aug)", key="manage_newdate"
-            )
+            new_date = st.text_input("New date label (e.g., 19-Aug)", key="manage_newdate")
         with colB:
             if st.button("Add date column", key="manage_adddate"):
                 if new_date.strip():
@@ -1128,7 +981,6 @@ with tabs[5]:
                     st.success(f"Added column {new_date.strip()}.")
                     st.experimental_rerun()
 
-        # One-click Next SATURDAY
         if st.button("➕ Add NEXT SATURDAY column", key="manage_next_sat"):
             ns = next_saturday_from()
             if ns in df.columns:
