@@ -8,6 +8,9 @@ from pathlib import Path
 from contextlib import contextmanager
 import time
 import altair as alt
+import os
+import smtplib
+from email.message import EmailMessage
 
 CSV_DEFAULT = "attendance_clean.csv"
 
@@ -312,6 +315,98 @@ def compute_tracking(df: pd.DataFrame) -> pd.DataFrame:
         by=["Attendance %", "Name", "Surname"], ascending=[False, True, True]
     ).reset_index(drop=True)
 
+# ---------- Birthday helpers ----------
+def parse_dob(dob_str: str):
+    """Parse 'Date Of Birth' cell into a date object."""
+    dob_str = dob_str.strip()
+    if not dob_str:
+        return None
+    # Try a few common formats (e.g. 5-Mar-14, 05-Mar-2014, 05/03/2014)
+    for fmt in ("%d-%b-%y", "%d-%b-%Y", "%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(dob_str, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+def get_birthdays_for_week(df: pd.DataFrame, today: datetime | None = None):
+    """
+    Look at 'Date Of Birth' and return a list of learners whose birthday is:
+      - today          -> 'today'
+      - last 6 days    -> 'belated'
+      - next 7 days    -> 'upcoming'
+    """
+    if "Date Of Birth" not in df.columns:
+        return []
+
+    if today is None:
+        today = datetime.now().date()
+
+    week_start = today - timedelta(days=6)   # past week (incl today)
+    upcoming_end = today + timedelta(days=7)
+
+    results = []
+    for _, r in df.iterrows():
+        dob = parse_dob(str(r.get("Date Of Birth", "")))
+        if not dob:
+            continue
+
+        birthday_this_year = dob.replace(year=today.year)
+
+        if birthday_this_year == today:
+            kind = "today"
+        elif week_start <= birthday_this_year < today:
+            kind = "belated"
+        elif today < birthday_this_year <= upcoming_end:
+            kind = "upcoming"
+        else:
+            continue
+
+        results.append(
+            {
+                "Name": str(r.get("Name", "")),
+                "Surname": str(r.get("Surname", "")),
+                "Grade": str(r.get("Grade", "")),
+                "Barcode": str(r.get("Barcode", "")),
+                "DOB": str(r.get("Date Of Birth", "")),
+                "Kind": kind,
+            }
+        )
+    return results
+
+# ---------- Email helper for birthdays ----------
+def send_birthday_email(recipients, subject: str, body: str) -> bool:
+    """
+    recipients: list of email addresses
+    Uses env vars SENDER_EMAIL and SENDER_PASSWORD.
+    """
+    recipients = [r.strip() for r in recipients if r.strip()]
+    if not recipients:
+        st.error("No email recipients provided.")
+        return False
+
+    EMAIL_ADDRESS = os.environ.get("SENDER_EMAIL")
+    EMAIL_PASSWORD = os.environ.get("SENDER_PASSWORD")
+
+    if not EMAIL_ADDRESS or not EMAIL_PASSWORD:
+        st.error("Email credentials missing (SENDER_EMAIL / SENDER_PASSWORD).")
+        return False
+
+    msg = EmailMessage()
+    msg["From"] = EMAIL_ADDRESS
+    msg["To"] = ", ".join(recipients)  # many people at once
+    msg["Subject"] = subject
+    msg.set_content(body)
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
+            smtp.send_message(msg)
+        return True
+    except Exception as e:
+        st.error(f"Failed to send email: {e}")
+        return False
+
 # ---------- NEW: Grades report helper ----------
 def build_grades_export(df: pd.DataFrame, date_sel: str, grades: list[str], grade_capacity: int) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
@@ -565,6 +660,24 @@ with tabs[1]:
     if not df.empty:
         ensure_today_column(df)
 
+        # 🎂 Birthday banner (today / belated / upcoming)
+        birthdays = get_birthdays_for_week(df)
+        if birthdays:
+            st.markdown("### 🎂 Birthdays around this week")
+            for b in birthdays:
+                full_name = f"{b['Name']} {b['Surname']}".strip()
+                grade = b.get("Grade", "")
+                if b["Kind"] == "today":
+                    msg = "🎉 **Happy Birthday**"
+                elif b["Kind"] == "belated":
+                    msg = "🎂 **Happy belated birthday**"
+                else:
+                    msg = "🎁 **Upcoming birthday**"
+                extra = f" (Grade {grade})" if grade else ""
+                st.markdown(f"- {msg}, {full_name}{extra} – DOB: {b['DOB']}")
+        else:
+            st.caption("No birthdays this week or in the next 7 days.")
+
         # Filters
         fc1, fc2, fc3 = st.columns(3)
         with fc1:
@@ -725,7 +838,7 @@ with tabs[2]:
                 st.markdown(f"**Summary for {date_sel}**")
                 st.dataframe(summary_df, use_container_width=True, height=260)
 
-                # Learner list (all grades) with Present/Absent ONLY (no percentage per learner)
+                # Learner list (all grades) with Present/Absent ONLY
                 learners_view = combined_export_df[combined_export_df["Section"] == "LEARNERS"].copy()
                 learners_view = learners_view[["Date", "Grade", "Name", "Surname", "Barcode", "Status"]]
                 st.write("")
@@ -743,6 +856,41 @@ with tabs[2]:
                 )
 
                 st.caption("Tip: In Excel/Google Sheets, filter the 'Section' column to view SUMMARY or LEARNERS.")
+
+                # ---- Birthday email section (send to 2+ people) ----
+                st.markdown("---")
+                st.markdown("### 🎂 Email this week's birthday list")
+                email_input = st.text_input(
+                    "Send to (comma-separated emails, e.g. teacher1@..., teacher2@...)",
+                    value="",
+                    key="grades_bday_emails",
+                )
+                if st.button("Send this week's birthday email", key="grades_bday_btn"):
+                    bdays = get_birthdays_for_week(df)
+                    if not bdays:
+                        st.info("No birthdays this week or in the next 7 days.")
+                    else:
+                        lines = []
+                        for b in bdays:
+                            full_name = f"{b['Name']} {b['Surname']}".strip()
+                            grade = b.get("Grade", "")
+                            if b["Kind"] == "today":
+                                label = "Today"
+                            elif b["Kind"] == "belated":
+                                label = "Belated (this week)"
+                            else:
+                                label = "Upcoming (next 7 days)"
+                            lines.append(
+                                f"{label}: {full_name} (Grade {grade}) – DOB {b['DOB']} – Barcode {b['Barcode']}"
+                            )
+                        body = "Tutor Class Birthdays Summary\n\n" + "\n".join(lines)
+                        recipients = [x.strip() for x in email_input.split(",")]
+                        if send_birthday_email(
+                            recipients,
+                            subject="Tutor Class – Birthdays around this week 🎂",
+                            body=body,
+                        ):
+                            st.success("Birthday email sent.")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
