@@ -429,7 +429,7 @@ with logo_col2:
     st.image("tzu_chi_logo.png", width=200)
 
 st.markdown(
-    "<h1 style='text-align:center; margin-bottom:-5px;'>Tutor Class Attendance Register 2025</h1>",
+    "<h1 style='text-align:center; margin-bottom:-5px;'>Tutor Class Attendance Register 2026</h1>",
     unsafe_allow_html=True,
 )
 st.markdown(
@@ -1003,3 +1003,4 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
