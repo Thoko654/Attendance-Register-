@@ -14,6 +14,14 @@ from email.message import EmailMessage
 
 CSV_DEFAULT = "attendance_clean.csv"
 
+# 👇 NEW: default list of people who will receive birthday emails automatically
+# Change these to your real emails, e.g.:
+# BIRTHDAY_EMAIL_RECIPIENTS = ["teacher1@example.com", "teacher2@example.com"]
+BIRTHDAY_EMAIL_RECIPIENTS = [
+    "teacher1@example.com",
+    "teacher2@example.com",
+]
+
 # ---------- Utilities ----------
 def today_col_label() -> str:
     now = datetime.now()
@@ -675,6 +683,36 @@ with tabs[1]:
                     msg = "🎁 **Upcoming birthday**"
                 extra = f" (Grade {grade})" if grade else ""
                 st.markdown(f"- {msg}, {full_name}{extra} – DOB: {b['DOB']}")
+
+            # 👇 NEW: Automatically email birthday list on Saturday (once per day/session)
+            if is_saturday_class_day():
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                already_sent_for = st.session_state.get("birthday_email_sent_for")
+                if already_sent_for != today_str:
+                    lines = []
+                    for b in birthdays:
+                        full_name = f"{b['Name']} {b['Surname']}".strip()
+                        grade = b.get("Grade", "")
+                        if b["Kind"] == "today":
+                            label = "Today"
+                        elif b["Kind"] == "belated":
+                            label = "Belated (this week)"
+                        else:
+                            label = "Upcoming (next 7 days)"
+                        lines.append(
+                            f"{label}: {full_name} (Grade {grade}) – DOB {b['DOB']} – Barcode {b['Barcode']}"
+                        )
+                    body = "Tutor Class Birthdays Summary\n\n" + "\n".join(lines)
+
+                    if send_birthday_email(
+                        BIRTHDAY_EMAIL_RECIPIENTS,
+                        subject="Tutor Class – Birthdays around this week 🎂",
+                        body=body,
+                    ):
+                        st.success(
+                            "Automatic birthday email sent to registered recipients ✅"
+                        )
+                        st.session_state["birthday_email_sent_for"] = today_str
         else:
             st.caption("No birthdays this week or in the next 7 days.")
 
@@ -856,41 +894,6 @@ with tabs[2]:
                 )
 
                 st.caption("Tip: In Excel/Google Sheets, filter the 'Section' column to view SUMMARY or LEARNERS.")
-
-                # ---- Birthday email section (send to 2+ people) ----
-                st.markdown("---")
-                st.markdown("### 🎂 Email this week's birthday list")
-                email_input = st.text_input(
-                    "Send to (comma-separated emails, e.g. teacher1@..., teacher2@...)",
-                    value="",
-                    key="grades_bday_emails",
-                )
-                if st.button("Send this week's birthday email", key="grades_bday_btn"):
-                    bdays = get_birthdays_for_week(df)
-                    if not bdays:
-                        st.info("No birthdays this week or in the next 7 days.")
-                    else:
-                        lines = []
-                        for b in bdays:
-                            full_name = f"{b['Name']} {b['Surname']}".strip()
-                            grade = b.get("Grade", "")
-                            if b["Kind"] == "today":
-                                label = "Today"
-                            elif b["Kind"] == "belated":
-                                label = "Belated (this week)"
-                            else:
-                                label = "Upcoming (next 7 days)"
-                            lines.append(
-                                f"{label}: {full_name} (Grade {grade}) – DOB {b['DOB']} – Barcode {b['Barcode']}"
-                            )
-                        body = "Tutor Class Birthdays Summary\n\n" + "\n".join(lines)
-                        recipients = [x.strip() for x in email_input.split(",")]
-                        if send_birthday_email(
-                            recipients,
-                            subject="Tutor Class – Birthdays around this week 🎂",
-                            body=body,
-                        ):
-                            st.success("Birthday email sent.")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
