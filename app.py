@@ -18,7 +18,7 @@ CSV_DEFAULT = "attendance_clean.csv"
 # Change these to your real emails, e.g.:
 # BIRTHDAY_EMAIL_RECIPIENTS = ["teacher1@example.com", "teacher2@example.com"]
 BIRTHDAY_EMAIL_RECIPIENTS = [
-    "teacher1@example.com",
+    "thokozanip11@gmail.com",
     "teacher2@example.com",
 ]
 
@@ -1154,3 +1154,4 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
