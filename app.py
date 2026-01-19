@@ -16,7 +16,7 @@ CSV_DEFAULT = "attendance_clean.csv"
 
 # 👇 NEW: default list of people who will receive birthday emails automatically
 # Change these to your real emails, e.g.:
-# BIRTHDAY_EMAIL_RECIPIENTS = ["teacher1@example.com", "teacher2@example.com"]
+# BIRTHDAY_EMAIL_RECIPIENTS = ["thokozanip11@gmail.com", "teacher2@example.com"]
 BIRTHDAY_EMAIL_RECIPIENTS = [
     "thokozanip11@gmail.com",
     "teacher2@example.com",
@@ -1154,4 +1154,5 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
