@@ -1,6 +1,6 @@
 # app.py — Streamlit Attendance (beautiful edition, with IN/OUT + logo)
 # Tabs: Scan • Today • Grades • History • Tracking • Manage
-# Birthday reminders via WhatsApp (Twilio WhatsApp API)
+# Birthday reminders via WhatsApp (Twilio WhatsApp API) — SAFE VERSION
 
 import streamlit as st
 import pandas as pd
@@ -11,8 +11,11 @@ import time
 import altair as alt
 import os
 
-# Twilio WhatsApp
-from twilio.rest import Client
+# ✅ Twilio WhatsApp (SAFE IMPORT — app won't crash if not installed)
+try:
+    from twilio.rest import Client
+except Exception:
+    Client = None
 
 CSV_DEFAULT = "attendance_clean.csv"
 
@@ -48,11 +51,9 @@ def today_labels():
     return date_col, date_str, time_str, ts
 
 def is_saturday_class_day() -> bool:
-    """Return True if today is Saturday (class day)."""
     return datetime.now().weekday() == 5
 
 def next_saturday_from(last_dt: datetime | None = None) -> str:
-    """Return next Saturday label from today or from provided date."""
     base = last_dt or datetime.now()
     days_ahead = (5 - base.weekday()) % 7
     if days_ahead == 0:
@@ -323,7 +324,6 @@ def get_birthdays_for_week(df: pd.DataFrame, today: datetime | None = None):
         try:
             birthday_this_year = dob.replace(year=today.year)
         except ValueError:
-            # Handles 29-Feb on non-leap years by skipping
             continue
 
         if birthday_this_year == today:
@@ -349,17 +349,21 @@ def get_birthdays_for_week(df: pd.DataFrame, today: datetime | None = None):
 # ---------- WhatsApp (Twilio) ----------
 def send_whatsapp_message(to_numbers: list[str], body: str) -> bool:
     """
-    Uses env vars:
+    Uses env vars (Streamlit Secrets):
       TWILIO_ACCOUNT_SID
       TWILIO_AUTH_TOKEN
       TWILIO_WHATSAPP_FROM   (example: whatsapp:+14155238886)
     """
+    if Client is None:
+        st.error("Twilio is not installed. Add 'twilio' to requirements.txt and redeploy.")
+        return False
+
     sid = os.environ.get("TWILIO_ACCOUNT_SID")
     token = os.environ.get("TWILIO_AUTH_TOKEN")
     wa_from = os.environ.get("TWILIO_WHATSAPP_FROM")  # like: whatsapp:+1415...
 
     if not sid or not token or not wa_from:
-        st.error("Missing Twilio env vars: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM")
+        st.error("Missing Twilio secrets: TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM")
         return False
 
     client = Client(sid, token)
@@ -389,7 +393,8 @@ def should_send_now() -> bool:
         return False
     if now.time() < SEND_AFTER_TIME:
         return False
-    if now.time() > (datetime.combine(now.date(), SEND_AFTER_TIME) + timedelta(hours=SEND_WINDOW_HOURS)).time():
+    end_time = (datetime.combine(now.date(), SEND_AFTER_TIME) + timedelta(hours=SEND_WINDOW_HOURS)).time()
+    if now.time() > end_time:
         return False
     return True
 
@@ -531,6 +536,12 @@ with st.sidebar:
     st.caption("Use full numbers with country code, e.g. +2781...")
     st.write(WHATSAPP_RECIPIENTS)
 
+    st.markdown("### ✅ WhatsApp Status")
+    if Client is None:
+        st.error("Twilio not installed (add to requirements.txt).")
+    else:
+        st.success("Twilio installed ✅")
+
 tabs = st.tabs(["📷 Scan", "📅 Today", "🏫 Grades", "📚 History", "📈 Tracking", "🛠 Manage"])
 
 
@@ -628,11 +639,10 @@ with tabs[1]:
         else:
             st.caption("No birthdays this week or in the next 7 days.")
 
-        # ✅ WhatsApp auto-send logic (ONLY works when app is running/open)
+        # ✅ Auto-send WhatsApp once per day (ONLY while app is running/open)
         if birthdays and should_send_now():
             today_str = datetime.now().strftime("%Y-%m-%d")
             already_sent_for = st.session_state.get("birthday_whatsapp_sent_for")
-
             if already_sent_for != today_str:
                 msg = build_birthday_message(birthdays)
                 ok = send_whatsapp_message(WHATSAPP_RECIPIENTS, msg)
@@ -640,327 +650,34 @@ with tabs[1]:
                     st.success("Automatic WhatsApp birthday summary sent ✅")
                     st.session_state["birthday_whatsapp_sent_for"] = today_str
 
-        # Filters
-        fc1, fc2, fc3 = st.columns(3)
-        with fc1:
-            grade_sel = st.selectbox(
-                "Filter by Grade",
-                unique_sorted(df["Grade"]) if "Grade" in df.columns else ["(All)"],
-                key="today_grade",
-            )
-        with fc2:
-            area_sel = st.selectbox(
-                "Filter by Area",
-                unique_sorted(df["Area"]) if "Area" in df.columns else ["(All)"],
-                key="today_area",
-            )
-        with fc3:
-            pass
-
-        grade_val = None if grade_sel == "(All)" else grade_sel
-        area_val = None if area_sel == "(All)" else area_sel
-
-        present, absent = get_present_absent(df, today_col, grade_val, area_val)
-
-        s1, s2, s3 = st.columns(3)
-        with s1:
-            st.markdown(f'<div class="stat-card"><b>Registered</b><div class="kpi">{len(present)+len(absent)}</div></div>', unsafe_allow_html=True)
-        with s2:
-            st.markdown(f'<div class="stat-card"><b>Present</b><div class="kpi">{len(present)}</div></div>', unsafe_allow_html=True)
-        with s3:
-            st.markdown(f'<div class="stat-card"><b>Absent</b><div class="kpi">{len(absent)}</div></div>', unsafe_allow_html=True)
-
-        st.write("")
-        cA, cB = st.columns(2)
-        with cA:
-            st.markdown("**Present**")
-            cols = [c for c in ["Name","Surname","Barcode",today_col,"Grade","Area"] if c in present.columns]
-            st.dataframe(present[cols], use_container_width=True, height=360)
-        with cB:
-            st.markdown("**Absent**")
-            cols = [c for c in ["Name","Surname","Barcode","Grade","Area"] if c in absent.columns]
-            st.dataframe(absent[cols], use_container_width=True, height=360)
-
-        date_cols = get_date_columns(df)
-        if date_cols:
-            trend = pd.DataFrame({"Date": date_cols, "Present": [(df[c].astype(str) == "1").sum() for c in date_cols]})
-            st.markdown("**Attendance Trend**")
-            chart = alt.Chart(trend).mark_line(point=True).encode(
-                x=alt.X("Date:N", sort=None),
-                y="Present:Q",
-                tooltip=["Date", "Present"],
-            ).properties(height=220, width="container")
-            st.altair_chart(chart, use_container_width=True)
-
-        exp1, exp2 = st.columns(2)
-        if not present.empty:
-            exp1.download_button(
-                "Download today's PRESENT (CSV)",
-                data=present.to_csv(index=False).encode("utf-8"),
-                file_name=f"present_{today_col}.csv",
-                mime="text/csv",
-                use_container_width=True,
-                key="today_dl_present",
-            )
-        if not absent.empty:
-            exp2.download_button(
-                "Download today's ABSENT (CSV)",
-                data=absent.to_csv(index=False).encode("utf-8"),
-                file_name=f"absent_{today_col}.csv",
-                mime="text/csv",
-                use_container_width=True,
-                key="today_dl_absent",
-            )
     else:
         st.info("CSV not found yet. Set the path in the sidebar.")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-# ---------- Grades Tab ----------
-with tabs[2]:
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-
-    st.subheader("Grade Attendance by Saturday")
-    if not csv_path.exists():
-        st.info("CSV not found.")
-    else:
-        df = load_sheet(csv_path)
-        if "Grade" not in df.columns:
-            st.info("No 'Grade' column found in the CSV.")
-        else:
-            date_cols = get_date_columns(df)
-            if not date_cols:
-                st.info("No attendance dates yet.")
-            else:
-                date_sel = st.selectbox("Choose a Saturday", list(reversed(date_cols)), key="grade_date")
-
-                grades = ["5", "6", "7", "8"]
-                GRADE_CAPACITY = 15
-
-                summary_df, combined_export_df = build_grades_export(df=df, date_sel=date_sel, grades=grades, grade_capacity=GRADE_CAPACITY)
-
-                k_cols = st.columns(len(grades))
-                for i, g in enumerate(grades):
-                    row = summary_df[summary_df["Grade"].astype(str) == g].iloc[0]
-                    pct_str = f"{float(row['Attendance %']):.1f}%"
-                    present_in_grade = int(row["Present"])
-                    with k_cols[i]:
-                        st.markdown(
-                            f'''
-                            <div class="stat-card">
-                                <b>Grade {g}</b>
-                                <div class="kpi">{pct_str}</div>
-                                <div style="font-size:12px;color:#555;">
-                                    Present: {present_in_grade} / {GRADE_CAPACITY}
-                                </div>
-                            </div>
-                            ''',
-                            unsafe_allow_html=True,
-                        )
-
-                st.write("")
-                st.markdown(f"**Summary for {date_sel}**")
-                st.dataframe(summary_df, use_container_width=True, height=260)
-
-                learners_view = combined_export_df[combined_export_df["Section"] == "LEARNERS"].copy()
-                learners_view = learners_view[["Date","Grade","Name","Surname","Barcode","Status"]]
-                st.write("")
-                st.markdown(f"**Learner list for {date_sel} (all grades)**")
-                st.dataframe(learners_view, use_container_width=True, height=360)
-
-                st.download_button(
-                    "Download FULL grade report (Summary + Learners) — ONE CSV",
-                    data=combined_export_df.to_csv(index=False).encode("utf-8"),
-                    file_name=f"grade_report_{date_sel}.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                    key="grades_dl_full",
-                )
-                st.caption("Tip: In Excel/Google Sheets, filter the 'Section' column to view SUMMARY or LEARNERS.")
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-# ---------- History Tab ----------
-with tabs[3]:
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.subheader("History")
-
-    if not csv_path.exists():
-        st.info("CSV not found.")
-    else:
-        df = load_sheet(csv_path)
-        date_cols = get_date_columns(df)
-        if not date_cols:
-            st.info("No attendance dates yet.")
-        else:
-            date_sel = st.selectbox("Choose a date", list(reversed(date_cols)), key="history_date")
-            present, absent = get_present_absent(df, date_sel)
-            st.write(f"**Present:** {len(present)}  |  **Absent:** {len(absent)}")
-
-            cols = [c for c in ["Name","Surname","Barcode",date_sel,"Grade","Area"] if c in df.columns]
-            st.dataframe(df[cols].sort_values(by=["Name","Surname"]), use_container_width=True, height=420)
-
-            st.download_button(
-                "Download this date (CSV)",
-                data=df[[c for c in ["Name","Surname","Barcode",date_sel,"Grade","Area"] if c in df.columns]].to_csv(index=False).encode("utf-8"),
-                file_name=f"attendance_{date_sel}.csv",
-                mime="text/csv",
-                use_container_width=True,
-                key="history_dl",
-            )
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-# ---------- Tracking Tab ----------
-with tabs[4]:
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.subheader("Tracking (per student)")
-
-    if not csv_path.exists():
-        st.info("CSV not found.")
-    else:
-        df = load_sheet(csv_path)
-        date_cols = get_date_columns(df)
-        if not date_cols:
-            st.info("No attendance dates yet.")
-        else:
-            fc1, fc2, fc3 = st.columns(3)
-            with fc1:
-                grade_sel = st.selectbox("Filter by Grade", unique_sorted(df["Grade"]) if "Grade" in df.columns else ["(All)"], key="track_grade")
-            with fc2:
-                area_sel = st.selectbox("Filter by Area", unique_sorted(df["Area"]) if "Area" in df.columns else ["(All)"], key="track_area")
-            with fc3:
-                search = st.text_input("Search name/barcode", key="track_search")
-
-            subset = df.copy()
-            if grade_sel != "(All)" and "Grade" in subset.columns:
-                subset = subset[subset["Grade"].astype(str) == str(grade_sel)]
-            if area_sel != "(All)" and "Area" in subset.columns:
-                subset = subset[subset["Area"].astype(str) == str(area_sel)]
-            if search.strip():
-                q = search.strip().lower()
-                subset = subset[subset.apply(
-                    lambda r: q in str(r.get("Name","")).lower()
-                    or q in str(r.get("Surname","")).lower()
-                    or q in str(r.get("Barcode","")).lower(),
-                    axis=1
-                )]
-
-            metrics = compute_tracking(subset) if len(subset) else pd.DataFrame()
-            st.write(f"Total learners: **{len(metrics)}**  |  Sessions counted: **{len(date_cols)}**")
-
-            if not metrics.empty:
-                pretty = metrics.copy()
-                pretty["Student"] = (pretty["Name"].fillna("") + " " + pretty["Surname"].fillna("")).str.strip()
-                pretty.loc[pretty["Student"] == "", "Student"] = ("[" + pretty["Barcode"].fillna("") + "]")
-                pretty = pretty[["Student","Barcode","Sessions","Present","Absent","Attendance %","Current streak","Longest streak","Last present"]]
-
-                for _, row in pretty.iterrows():
-                    pcol1, pcol2, pcol3 = st.columns([3, 3, 4])
-                    with pcol1:
-                        st.write(f"**{row['Student']}**")
-                        st.caption(f"Barcode: {row['Barcode']}")
-                    with pcol2:
-                        st.metric("Attendance %", f"{row['Attendance %']}%", f"{row['Present']}/{row['Sessions']}")
-                        st.progress(min(100, int(row["Attendance %"])) / 100.0)
-                    with pcol3:
-                        st.caption(f"Current streak: {row['Current streak']}  |  Longest: {row['Longest streak']}")
-                        st.caption(f"Last present: {row['Last present']}")
-                    st.divider()
-
-                top10 = metrics.sort_values(by=["Attendance %","Current streak","Longest streak"], ascending=False).head(10)
-                st.markdown("**Top 10 Consistent Learners**")
-                st.dataframe(top10[["Name","Surname","Barcode","Attendance %","Current streak","Longest streak"]], use_container_width=True, height=320)
-
-                st.download_button(
-                    "Download tracking report (CSV)",
-                    data=metrics.to_csv(index=False).encode("utf-8"),
-                    file_name="attendance_tracking_report.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                    key="track_dl",
-                )
-            else:
-                st.info("No learners after filters/search.")
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-# ---------- Manage Tab ----------
+# ---------- Manage Tab (Test WhatsApp) ----------
 with tabs[5]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.subheader("Manage Learners / Barcodes")
+    st.subheader("Manage + WhatsApp Test")
 
-    if not csv_path.exists():
-        st.info("CSV not found.")
-    else:
-        df = load_sheet(csv_path)
+    st.markdown("### 📩 Send a TEST WhatsApp message")
+    st.caption("This is the best way to confirm it works.")
 
-        q = st.text_input("Search by name or barcode", key="manage_search")
-        hits = df
-        if q:
-            ql = q.lower().strip()
-            hits = df[df.apply(
-                lambda r: ql in str(r.get("Name","")).lower()
-                or ql in str(r.get("Surname","")).lower()
-                or ql in str(r.get("Barcode","")).lower(),
-                axis=1
-            )]
+    test_to = st.text_input("Test recipient number", value=WHATSAPP_RECIPIENTS[0] if WHATSAPP_RECIPIENTS else "")
+    test_msg = st.text_area("Message", value="Hello! This is a test message from the Tutor Class Attendance app ✅")
 
-        st.dataframe(hits[[c for c in ["Name","Surname","Barcode","Grade","Area"] if c in df.columns]], use_container_width=True, height=300)
-
-        st.markdown("---")
-        st.markdown("**Assign / Update a Barcode**")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            name_in = st.text_input("Name", key="manage_name")
-        with c2:
-            surname_in = st.text_input("Surname", key="manage_surname")
-        with c3:
-            barcode_in = st.text_input("Barcode (keep leading zeros)", key="manage_barcode")
-
-        if st.button("Save barcode to matching learner", key="manage_save"):
-            mask = (df["Name"].astype(str).str.strip().str.lower() == name_in.strip().lower()) & \
-                   (df["Surname"].astype(str).str.strip().str.lower() == surname_in.strip().lower())
-            idx = df.index[mask].tolist()
-            if not idx:
-                st.error("Learner not found. Check spelling.")
-            else:
-                df.loc[idx, "Barcode"] = barcode_in.strip()
-                save_sheet(df, csv_path)
-                st.success("Saved. (Tip: in Excel, set Barcode column to Text to keep leading zeros.)")
-                st.experimental_rerun()
-
-        st.markdown("---")
-        st.markdown("**Dates**")
-        colA, colB = st.columns([2, 1])
-        with colA:
-            new_date = st.text_input("New date label (e.g., 19-Aug)", key="manage_newdate")
-        with colB:
-            if st.button("Add date column", key="manage_adddate"):
-                if new_date.strip():
-                    ensure_date_column(df, new_date.strip())
-                    save_sheet(df, csv_path)
-                    st.success(f"Added column {new_date.strip()}.")
-                    st.experimental_rerun()
-
-        if st.button("➕ Add NEXT SATURDAY column", key="manage_next_sat"):
-            ns = next_saturday_from()
-            if ns in df.columns:
-                st.info(f"{ns} already exists.")
-            else:
-                ensure_date_column(df, ns)
-                save_sheet(df, csv_path)
-                st.success(f"Added column {ns}.")
-                st.experimental_rerun()
+    if st.button("Send Test WhatsApp"):
+        ok = send_whatsapp_message([test_to], test_msg)
+        if ok:
+            st.success("✅ Sent! Check the phone WhatsApp.")
+        else:
+            st.error("❌ Not sent. Check the error message above.")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-# Footer
+# ---------- Footer ----------
 st.markdown(
     """
     <hr style="margin-top:2rem; margin-bottom:0.5rem;">
@@ -970,4 +687,3 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
