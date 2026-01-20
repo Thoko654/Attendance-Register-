@@ -19,8 +19,8 @@ CSV_DEFAULT = "attendance_clean.csv"
 # ✅ WhatsApp recipients (must include country code, no spaces)
 # Example South Africa: +27...
 WHATSAPP_RECIPIENTS = [
-    "+27810000000",
-    "+27820000000",
+    "+27836280453",
+    "+27672291308",
 ]
 
 # WhatsApp send rules
@@ -970,3 +970,4 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
