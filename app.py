@@ -190,11 +190,11 @@ def determine_next_action(log_df: pd.DataFrame, barcode: str, date_str: str) -> 
     today_rows = log_df[
         (log_df["Date"] == date_str) &
         (log_df["Barcode"].astype(str).apply(_norm) == norm_b)
-    ]
-    if today_rows.empty:
-        return "IN"
-    last_action = str(today_rows.iloc[-1]["Action"]).upper()
-    return "OUT" if last_action == "IN" else "IN"
+    ]st.markdown(f"### Currently IN today ({date_str})")
+if current_in.empty:
+    st.caption("No one is currently IN.")
+else:
+    st.dataframe(current_in, use_container_width=True, height=260)
 
 def get_currently_in(log_df: pd.DataFrame, date_str: str) -> pd.DataFrame:
     if log_df.empty:
@@ -832,3 +832,4 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
