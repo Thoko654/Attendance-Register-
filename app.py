@@ -57,7 +57,6 @@ def gh_update_file(path, new_content, message):
     r.raise_for_status()
     return r.json()
 
-
 # ------------------ CONFIG ------------------
 APP_TZ = os.environ.get("APP_TIMEZONE", "Africa/Johannesburg")  # you can set in Streamlit Secrets
 TZ = ZoneInfo(APP_TZ)
@@ -1065,4 +1064,5 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
