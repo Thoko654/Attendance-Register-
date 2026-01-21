@@ -20,6 +20,43 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 import pandas as pd
 import altair as alt
+import requests
+import base64
+
+def gh_headers():
+    return {
+        "Authorization": f"token {st.secrets['GITHUB_TOKEN']}",
+        "Accept": "application/vnd.github+json"
+    }
+
+def gh_get_file(path):
+    repo = st.secrets["GITHUB_REPO"]
+    branch = st.secrets.get("GITHUB_BRANCH", "main")
+    url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
+    r = requests.get(url, headers=gh_headers())
+    r.raise_for_status()
+    data = r.json()
+    content = base64.b64decode(data["content"]).decode("utf-8")
+    return content, data["sha"]
+
+def gh_update_file(path, new_content, message):
+    repo = st.secrets["GITHUB_REPO"]
+    branch = st.secrets.get("GITHUB_BRANCH", "main")
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+
+    # get current SHA
+    _, sha = gh_get_file(path)
+
+    payload = {
+        "message": message,
+        "content": base64.b64encode(new_content.encode("utf-8")).decode("utf-8"),
+        "sha": sha,
+        "branch": branch
+    }
+    r = requests.put(url, headers=gh_headers(), json=payload)
+    r.raise_for_status()
+    return r.json()
+
 
 # ------------------ CONFIG ------------------
 APP_TZ = os.environ.get("APP_TIMEZONE", "Africa/Johannesburg")  # you can set in Streamlit Secrets
@@ -98,25 +135,21 @@ def file_guard(path: Path):
     if last_err:
         raise last_err
 
-def load_sheet(csv_path: Path) -> pd.DataFrame:
-    with file_guard(csv_path):
-        df = pd.read_csv(csv_path, dtype=str).fillna("")
-    # ensure basic columns exist
-    if "Barcode" not in df.columns:
-        df.insert(0, "Barcode", "")
-    if "Name" not in df.columns:
-        df["Name"] = ""
-    if "Surname" not in df.columns:
-        df["Surname"] = ""
-    if "Grade" not in df.columns:
-        df["Grade"] = ""
-    if "Area" not in df.columns:
-        df["Area"] = ""
-    return df
+from io import StringIO
 
-def save_sheet(df: pd.DataFrame, csv_path: Path):
-    with file_guard(csv_path):
-        df.to_csv(csv_path, index=False)
+def load_sheet_from_github(filename="attendance_clean.csv"):
+    content, sha = gh_get_file(filename)
+    df = pd.read_csv(StringIO(content), dtype=str).fillna("")
+    return df, sha
+
+
+def save_sheet_to_github(df, filename="attendance_clean.csv"):
+    csv_text = df.to_csv(index=False)
+    gh_update_file(
+        filename,
+        csv_text,
+        message=f"Update {filename} from Streamlit app"
+    )
 
 def ensure_date_column(df: pd.DataFrame, col: str) -> None:
     if col not in df.columns:
@@ -1032,3 +1065,4 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
