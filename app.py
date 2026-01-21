@@ -770,7 +770,10 @@ with tabs[4]:
 
 # ------------------ Manage Tab ------------------
 with tabs[5]:
-    # --- CSS just for cleaner alignment ---
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.subheader("Manage Learners / Barcodes")
+
+    # --- small CSS for clean layout ---
     st.markdown(
         """
         <style>
@@ -792,21 +795,56 @@ with tabs[5]:
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.subheader("Manage Learners / Barcodes")
-
     df = load_sheet(csv_path)
-
     if "Date Of Birth" not in df.columns:
         df["Date Of Birth"] = ""
 
-    # ========== TOP ROW: Add (left) + Delete (right) ==========
+    editable_cols = ["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]
+
+    # =========================
+    # 1) TOP: Learner list
+    # =========================
+    st.markdown('<div class="manage-card">', unsafe_allow_html=True)
+    st.markdown('<p class="manage-title">✏️ Learner list (editable)</p>', unsafe_allow_html=True)
+    st.caption("Edit learners in the table, add rows at the bottom, then click Save changes.")
+
+    view_df = df.copy().reset_index(drop=True)
+    view_df.insert(0, "RowID", range(len(view_df)))  # for easier delete reference (not saved)
+
+    edited = st.data_editor(
+        view_df[["RowID"] + editable_cols],
+        use_container_width=True,
+        num_rows="dynamic",
+        key="data_editor_manage",
+    )
+
+    if st.button("💾 Save changes", use_container_width=True):
+        edited_clean = edited.drop(columns=["RowID"]).fillna("").astype(str)
+
+        # Remove accidental empty rows
+        edited_clean = edited_clean[~(
+            (edited_clean["Name"].str.strip() == "") &
+            (edited_clean["Surname"].str.strip() == "") &
+            (edited_clean["Barcode"].str.strip() == "")
+        )].reset_index(drop=True)
+
+        save_sheet(edited_clean, csv_path)
+        st.success("Saved ✅")
+        st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # =========================
+    # 2) Middle: Manage learners (Add + Delete)
+    # =========================
+    st.markdown('<div class="manage-card">', unsafe_allow_html=True)
+    st.markdown('<p class="manage-title">🛠 Manage learners</p>', unsafe_allow_html=True)
+
     left, right = st.columns([2, 1], gap="large")
 
+    # ---- Add learner (left) ----
     with left:
-        st.markdown('<div class="manage-card">', unsafe_allow_html=True)
-        st.markdown('<p class="manage-title">➕ Add a new learner</p>', unsafe_allow_html=True)
-
+        st.markdown("#### ➕ Add learner")
         with st.form("add_learner_form", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
             with c1:
@@ -816,7 +854,7 @@ with tabs[5]:
                 new_surname = st.text_input("Surname")
                 new_area = st.text_input("Area")
             with c3:
-                new_barcode = st.text_input("Barcode")
+                new_barcode = st.text_input("Barcode (required)")
                 new_dob = st.text_input("Date Of Birth (optional)")
 
             add_btn = st.form_submit_button("Add learner ✅", use_container_width=True)
@@ -837,23 +875,19 @@ with tabs[5]:
                         "Area": new_area.strip(),
                         "Date Of Birth": new_dob.strip(),
                     }
-                    # Keep any existing date columns too
+                    # keep any date columns too
                     for c in df.columns:
                         if c not in new_row:
                             new_row[c] = ""
 
-                    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                    save_sheet(df, csv_path)
+                    df2 = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                    save_sheet(df2, csv_path)
                     st.success("Learner added ✅")
                     st.rerun()
 
-        st.markdown("</div>", unsafe_allow_html=True)
-
+    # ---- Delete learner (right) ----
     with right:
-        st.markdown('<div class="manage-card">', unsafe_allow_html=True)
-        st.markdown('<p class="manage-title">🗑 Delete learner</p>', unsafe_allow_html=True)
-
-        # Build a stable RowID list for deletion
+        st.markdown("#### 🗑 Delete learner")
         df_for_delete = df.copy().reset_index(drop=True)
         df_for_delete["RowID"] = df_for_delete.index.astype(int)
 
@@ -861,16 +895,15 @@ with tabs[5]:
 
         if del_mode == "RowID":
             del_id = st.selectbox("Choose RowID", df_for_delete["RowID"].tolist())
-            confirm = st.checkbox("I confirm I want to delete this learner")
+            confirm = st.checkbox("Confirm delete", key="confirm_del_rowid")
             if st.button("Delete ❌", use_container_width=True, disabled=not confirm):
-                df2 = df_for_delete.drop(columns=["RowID"]).copy()
-                df2 = df2.drop(index=int(del_id), errors="ignore").reset_index(drop=True)
+                df2 = df_for_delete.drop(columns=["RowID"]).drop(index=int(del_id), errors="ignore").reset_index(drop=True)
                 save_sheet(df2, csv_path)
                 st.success("Deleted ✅")
                 st.rerun()
         else:
-            del_barcode = st.text_input("Enter barcode")
-            confirm = st.checkbox("I confirm I want to delete this learner", key="del_confirm_barcode")
+            del_barcode = st.text_input("Enter barcode", key="del_barcode")
+            confirm = st.checkbox("Confirm delete", key="confirm_del_barcode")
             if st.button("Delete ❌", use_container_width=True, disabled=not confirm):
                 b = del_barcode.strip()
                 if not b:
@@ -887,44 +920,11 @@ with tabs[5]:
                         st.success(f"Deleted {before - after} learner(s) ✅")
                         st.rerun()
 
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    # ========== FULL WIDTH: Editable table ==========
-    st.markdown('<div class="manage-card">', unsafe_allow_html=True)
-    st.markdown('<p class="manage-title">✏️ Learner list (editable)</p>', unsafe_allow_html=True)
-    st.caption("Edit any value in the table, then click Save changes. You can also add rows at the bottom.")
-
-    editable_cols = ["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]
-
-    # show RowID for clarity (but we don't save it)
-    view_df = df.copy().reset_index(drop=True)
-    view_df.insert(0, "RowID", range(len(view_df)))
-
-    edited = st.data_editor(
-        view_df[["RowID"] + editable_cols],
-        use_container_width=True,
-        num_rows="dynamic",
-        key="data_editor_manage"
-    )
-
-    if st.button("💾 Save changes", use_container_width=True):
-        edited_clean = edited.drop(columns=["RowID"]).copy()
-
-        # Optional: remove fully empty rows users may accidentally add
-        edited_clean = edited_clean.fillna("").astype(str)
-        edited_clean = edited_clean[~(
-            (edited_clean["Name"].str.strip() == "") &
-            (edited_clean["Surname"].str.strip() == "") &
-            (edited_clean["Barcode"].str.strip() == "")
-        )].reset_index(drop=True)
-
-        save_sheet(edited_clean, csv_path)
-        st.success("Saved ✅")
-        st.rerun()
-
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ========== FULL WIDTH: Dates ==========
+    # =========================
+    # 3) Bottom: Dates + WhatsApp
+    # =========================
     st.markdown('<div class="manage-card">', unsafe_allow_html=True)
     st.markdown('<p class="manage-title">📅 Dates</p>', unsafe_allow_html=True)
 
@@ -951,7 +951,23 @@ with tabs[5]:
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+    st.markdown('<div class="manage-card">', unsafe_allow_html=True)
+    st.markdown('<p class="manage-title">📩 WhatsApp Test (Twilio)</p>', unsafe_allow_html=True)
+
+    if Client is None:
+        st.warning("Twilio is not installed. Add `twilio` to requirements.txt.")
+    else:
+        test_to = st.text_input("Test recipient number (E.164)", value=WHATSAPP_RECIPIENTS[0] if WHATSAPP_RECIPIENTS else "+27...")
+        test_msg = st.text_area("Message", value="Hello! This is a test message from the Tutor Class Attendance app ✅")
+        if st.button("Send Test WhatsApp", use_container_width=True):
+            ok, info = send_whatsapp_message([test_to], test_msg)
+            st.success(info) if ok else st.error(info)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
     st.markdown('</div>', unsafe_allow_html=True)
+
+
 
 
 
