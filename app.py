@@ -579,12 +579,12 @@ with tabs[0]:
     log_df = load_log(log_path)
     _, date_str, _, _ = today_labels()
     current_in = get_currently_in(log_df, date_str)
+
     st.markdown(f"### Currently IN today ({date_str})")
-    log_df = load_log(log_path)
-_, date_str, _, _ = today_labels()
-current_in = get_currently_in(log_df, date_str)
-st.markdown(f"### Currently IN today ({date_str})")
-st.dataframe(current_in, use_container_width=True, height=260) if not current_in.empty else st.caption("No one is currently IN.")
+    if current_in.empty:
+        st.caption("No one is currently IN.")
+    else:
+        st.dataframe(current_in, use_container_width=True, height=260)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -836,4 +836,3 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
