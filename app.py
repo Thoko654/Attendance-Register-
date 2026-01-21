@@ -768,7 +768,6 @@ with tabs[4]:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-
 # ------------------ Manage Tab ------------------
 with tabs[5]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
@@ -779,16 +778,112 @@ with tabs[5]:
     if "Date Of Birth" not in df.columns:
         df["Date Of Birth"] = ""
 
-    editable_cols = ["Name","Surname","Barcode","Grade","Area","Date Of Birth"]
-    st.markdown("### Learner list (editable)")
-    edited = st.data_editor(df[editable_cols], use_container_width=True, num_rows="dynamic", key="data_editor_manage")
+    st.markdown("### ➕ Add a new learner")
+    with st.form("add_learner_form", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            new_name = st.text_input("Name")
+            new_grade = st.text_input("Grade (e.g., 5)")
+        with c2:
+            new_surname = st.text_input("Surname")
+            new_area = st.text_input("Area")
+        with c3:
+            new_barcode = st.text_input("Barcode")
+            new_dob = st.text_input("Date Of Birth (optional)")
 
-    if st.button("💾 Save changes", use_container_width=True):
-        for c in editable_cols:
-            df[c] = edited[c].astype(str)
-        save_sheet(df, csv_path)
-        st.success("Saved ✅")
-        st.rerun()
+        add_btn = st.form_submit_button("Add learner ✅", use_container_width=True)
+
+        if add_btn:
+            if not new_barcode.strip():
+                st.error("Barcode is required.")
+            else:
+                # prevent duplicate barcodes
+                exists = df["Barcode"].astype(str).apply(_norm).eq(_norm(new_barcode)).any()
+                if exists:
+                    st.error("That barcode already exists. Please use a unique barcode.")
+                else:
+                    new_row = {
+                        "Name": new_name.strip(),
+                        "Surname": new_surname.strip(),
+                        "Barcode": new_barcode.strip(),
+                        "Grade": new_grade.strip(),
+                        "Area": new_area.strip(),
+                        "Date Of Birth": new_dob.strip(),
+                    }
+                    # keep any existing date columns too
+                    for c in df.columns:
+                        if c not in new_row:
+                            new_row[c] = ""
+                    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                    save_sheet(df, csv_path)
+                    st.success("Learner added ✅")
+                    st.rerun()
+
+    st.divider()
+
+    editable_cols = ["Name","Surname","Barcode","Grade","Area","Date Of Birth"]
+    st.markdown("### ✏️ Learner list (editable)")
+    st.caption("Tip: You can also add rows at the bottom of the table, then click **Save changes**.")
+
+    # Create a view with an index so you can select rows to delete
+    view_df = df.copy()
+    view_df.insert(0, "RowID", range(len(view_df)))
+
+    edited = st.data_editor(
+        view_df[["RowID"] + editable_cols],
+        use_container_width=True,
+        num_rows="dynamic",
+        key="data_editor_manage"
+    )
+
+    cA, cB = st.columns(2)
+
+    with cA:
+        if st.button("💾 Save changes", use_container_width=True):
+            # Drop RowID and write back
+            edited_clean = edited.drop(columns=["RowID"]).copy()
+
+            # Safety: ensure barcode exists
+            if "Barcode" not in edited_clean.columns:
+                st.error("Barcode column missing. Please keep the Barcode column.")
+            else:
+                df = edited_clean.copy()
+                save_sheet(df, csv_path)
+                st.success("Saved ✅")
+                st.rerun()
+
+    with cB:
+        st.markdown("### 🗑 Delete learner")
+        del_mode = st.radio("Delete by:", ["Select RowID", "Barcode"], horizontal=True)
+
+        if del_mode == "Select RowID":
+            row_ids = edited["RowID"].astype(int).tolist() if len(edited) else []
+            del_id = st.selectbox("Choose RowID to delete", row_ids)
+            if st.button("Delete selected RowID ❌", use_container_width=True):
+                df2 = edited.drop(columns=["RowID"]).copy()
+                # delete the row at that position (RowID matches original index)
+                df2 = df2.drop(index=int(del_id), errors="ignore").reset_index(drop=True)
+                save_sheet(df2, csv_path)
+                st.success("Deleted ✅")
+                st.rerun()
+
+        else:
+            del_barcode = st.text_input("Enter barcode to delete")
+            if st.button("Delete barcode ❌", use_container_width=True):
+                b = del_barcode.strip()
+                if not b:
+                    st.error("Please enter a barcode.")
+                else:
+                    df2 = edited.drop(columns=["RowID"]).copy()
+                    before = len(df2)
+                    df2 = df2[df2["Barcode"].astype(str).apply(_norm) != _norm(b)].reset_index(drop=True)
+                    after = len(df2)
+                    if after == before:
+                        st.error("Barcode not found.")
+                    else:
+                        save_sheet(df2, csv_path)
+                        st.success(f"Deleted {before - after} learner(s) ✅")
+                        st.rerun()
 
     st.divider()
     st.markdown("### Dates")
@@ -827,12 +922,3 @@ with tabs[5]:
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-st.markdown(
-    """
-    <hr style="margin-top:2rem; margin-bottom:0.5rem;">
-    <p style="text-align:center; font-size:12px; color:#9ca3af;">
-        “Walk each step steadily, and you will not lose your way.” – Jing Si Aphorism
-    </p>
-    """,
-    unsafe_allow_html=True,
-)
