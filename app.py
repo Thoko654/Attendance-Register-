@@ -1,4 +1,5 @@
-# app.py — Tutor Class Attendance Register 2026 (Stable + Persist-safe + WhatsApp + downloads)
+# app.py — Tutor Class Attendance Register 2026
+# Stable + Persist-safe + WhatsApp + downloads
 # Tabs: Scan • Today • Grades • History • Tracking • Manage
 
 import os
@@ -88,7 +89,7 @@ def file_guard(_path: Path):
 
 def ensure_base_columns(df: pd.DataFrame) -> pd.DataFrame:
     # Ensure required columns exist (and keep all other columns)
-    for col in ["Barcode", "Name", "Surname", "Grade", "Area"]:
+    for col in ["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]:
         if col not in df.columns:
             df[col] = ""
     # Put Barcode first if exists
@@ -100,7 +101,6 @@ def ensure_base_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def create_empty_csv(csv_path: Path):
-    # Create a starter file so the app never crashes on first run
     df = pd.DataFrame(columns=["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"])
     with file_guard(csv_path):
         df.to_csv(csv_path, index=False)
@@ -525,7 +525,12 @@ with st.sidebar:
 tabs = st.tabs(["📷 Scan", "📅 Today", "🏫 Grades", "📚 History", "📈 Tracking", "🛠 Manage"])
 
 
-# ------------------ AUTO-SEND ------------------
+# ------------------ AUTO-SEND (Birthdays) ------------------
+# This will auto-send ONLY if:
+# - today is Saturday
+# - after 09:00 and within 12 hours window
+# - there are birthdays in this week/next 7 days
+# - and it hasn't sent already today (tracked by .whatsapp_sent_state.json)
 try:
     df_auto = load_sheet(csv_path)
     birthdays = get_birthdays_for_week(df_auto)
@@ -571,7 +576,10 @@ with tabs[0]:
             st.error("Today is not a class day. Scans are only allowed on Saturdays.")
         else:
             ok, msg = mark_scan_in_out(scan_value, csv_path, log_path)
-            st.success(msg) if ok else st.error(msg)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
         st.session_state["scan_box"] = ""
 
     st.text_input("Focus here and scan…", key="scan_box", label_visibility="collapsed", on_change=handle_scan)
@@ -579,12 +587,11 @@ with tabs[0]:
     log_df = load_log(log_path)
     _, date_str, _, _ = today_labels()
     current_in = get_currently_in(log_df, date_str)
-
     st.markdown(f"### Currently IN today ({date_str})")
-    if current_in.empty:
-        st.caption("No one is currently IN.")
-    else:
+    if not current_in.empty:
         st.dataframe(current_in, use_container_width=True, height=260)
+    else:
+        st.caption("No one is currently IN.")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -768,215 +775,154 @@ with tabs[4]:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
+
 # ------------------ Manage Tab ------------------
 with tabs[5]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Manage Learners / Barcodes")
 
-    # --- small CSS for clean layout ---
-    st.markdown(
-        """
-        <style>
-        .manage-card {
-            background: #ffffff;
-            padding: 16px 18px;
-            border-radius: 14px;
-            border: 1px solid #e5e7eb;
-            box-shadow: 0 6px 16px rgba(15,23,42,0.04);
-            margin-bottom: 14px;
-        }
-        .manage-title {
-            margin: 0 0 10px 0;
-            font-size: 16px;
-            font-weight: 700;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
     df = load_sheet(csv_path)
-    if "Date Of Birth" not in df.columns:
-        df["Date Of Birth"] = ""
 
-    editable_cols = ["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]
+    # 1) TOP: Learner list (editable)
+    st.markdown("### ✏️ Learner list (editable)")
+    editable_cols = ["Name","Surname","Barcode","Grade","Area","Date Of Birth"]
+    df = ensure_base_columns(df)
+    edited = st.data_editor(df[editable_cols], use_container_width=True, num_rows="dynamic", key="data_editor_manage")
 
-    # =========================
-    # 1) TOP: Learner list
-    # =========================
-    st.markdown('<div class="manage-card">', unsafe_allow_html=True)
-    st.markdown('<p class="manage-title">✏️ Learner list (editable)</p>', unsafe_allow_html=True)
-    st.caption("Edit learners in the table, add rows at the bottom, then click Save changes.")
+    save_col1, save_col2 = st.columns([1, 2])
+    with save_col1:
+        if st.button("💾 Save changes", use_container_width=True):
+            for c in editable_cols:
+                df[c] = edited[c].astype(str)
+            save_sheet(df, csv_path)
+            st.success("Saved ✅")
+            st.rerun()
+    with save_col2:
+        st.caption("Tip: You can also add rows at the bottom of the table, then click **Save changes**.")
 
-    view_df = df.copy().reset_index(drop=True)
-    view_df.insert(0, "RowID", range(len(view_df)))  # for easier delete reference (not saved)
+    st.divider()
 
-    edited = st.data_editor(
-        view_df[["RowID"] + editable_cols],
-        use_container_width=True,
-        num_rows="dynamic",
-        key="data_editor_manage",
-    )
+    # 2) Manage learners: Add + Delete
+    st.markdown("### 👥 Manage learners (Add / Delete)")
+    add_col, del_col = st.columns(2)
 
-    if st.button("💾 Save changes", use_container_width=True):
-        edited_clean = edited.drop(columns=["RowID"]).fillna("").astype(str)
-
-        # Remove accidental empty rows
-        edited_clean = edited_clean[~(
-            (edited_clean["Name"].str.strip() == "") &
-            (edited_clean["Surname"].str.strip() == "") &
-            (edited_clean["Barcode"].str.strip() == "")
-        )].reset_index(drop=True)
-
-        save_sheet(edited_clean, csv_path)
-        st.success("Saved ✅")
-        st.rerun()
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # =========================
-    # 2) Middle: Manage learners (Add + Delete)
-    # =========================
-    st.markdown('<div class="manage-card">', unsafe_allow_html=True)
-    st.markdown('<p class="manage-title">🛠 Manage learners</p>', unsafe_allow_html=True)
-
-    left, right = st.columns([2, 1], gap="large")
-
-    # ---- Add learner (left) ----
-    with left:
-        st.markdown("#### ➕ Add learner")
+    # ---- ADD learner ----
+    with add_col:
+        st.markdown("#### ➕ Add a new learner")
         with st.form("add_learner_form", clear_on_submit=True):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                new_name = st.text_input("Name")
-                new_grade = st.text_input("Grade (e.g., 5)")
-            with c2:
-                new_surname = st.text_input("Surname")
-                new_area = st.text_input("Area")
-            with c3:
-                new_barcode = st.text_input("Barcode (required)")
-                new_dob = st.text_input("Date Of Birth (optional)")
+            a_name = st.text_input("Name")
+            a_surname = st.text_input("Surname")
+            a_barcode = st.text_input("Barcode (must be unique)")
+            a_grade = st.text_input("Grade (e.g. 5)")
+            a_area = st.text_input("Area")
+            a_dob = st.text_input("Date Of Birth (optional)", placeholder="e.g. 2008-06-14 or 14/06/2008")
+            submitted = st.form_submit_button("Add learner ✅", use_container_width=True)
 
-            add_btn = st.form_submit_button("Add learner ✅", use_container_width=True)
-
-        if add_btn:
-            if not new_barcode.strip():
+        if submitted:
+            a_barcode_clean = a_barcode.strip()
+            if not a_barcode_clean:
                 st.error("Barcode is required.")
             else:
-                exists = df["Barcode"].astype(str).apply(_norm).eq(_norm(new_barcode)).any()
+                df_latest = load_sheet(csv_path)
+                exists = (df_latest["Barcode"].astype(str).apply(_norm) == _norm(a_barcode_clean)).any()
                 if exists:
-                    st.error("That barcode already exists. Please use a unique barcode.")
+                    st.error("That barcode already exists. Please use a different barcode.")
                 else:
                     new_row = {
-                        "Name": new_name.strip(),
-                        "Surname": new_surname.strip(),
-                        "Barcode": new_barcode.strip(),
-                        "Grade": new_grade.strip(),
-                        "Area": new_area.strip(),
-                        "Date Of Birth": new_dob.strip(),
+                        "Name": a_name.strip(),
+                        "Surname": a_surname.strip(),
+                        "Barcode": a_barcode_clean,
+                        "Grade": a_grade.strip(),
+                        "Area": a_area.strip(),
+                        "Date Of Birth": a_dob.strip(),
                     }
-                    # keep any date columns too
-                    for c in df.columns:
+                    # Keep any date columns (attendance history) empty for the new learner
+                    for c in df_latest.columns:
                         if c not in new_row:
                             new_row[c] = ""
-
-                    df2 = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                    save_sheet(df2, csv_path)
+                    df_latest = pd.concat([df_latest, pd.DataFrame([new_row])], ignore_index=True)
+                    df_latest = ensure_base_columns(df_latest)
+                    save_sheet(df_latest, csv_path)
                     st.success("Learner added ✅")
                     st.rerun()
 
-    # ---- Delete learner (right) ----
-    with right:
-        st.markdown("#### 🗑 Delete learner")
-        df_for_delete = df.copy().reset_index(drop=True)
-        df_for_delete["RowID"] = df_for_delete.index.astype(int)
+    # ---- DELETE learner ----
+    with del_col:
+        st.markdown("#### 🗑 Delete a learner")
+        df_latest = load_sheet(csv_path)
 
-        del_mode = st.radio("Delete by:", ["RowID", "Barcode"], horizontal=True)
-
-        if del_mode == "RowID":
-            del_id = st.selectbox("Choose RowID", df_for_delete["RowID"].tolist())
-            confirm = st.checkbox("Confirm delete", key="confirm_del_rowid")
-            if st.button("Delete ❌", use_container_width=True, disabled=not confirm):
-                df2 = df_for_delete.drop(columns=["RowID"]).drop(index=int(del_id), errors="ignore").reset_index(drop=True)
-                save_sheet(df2, csv_path)
-                st.success("Deleted ✅")
-                st.rerun()
+        if df_latest.empty:
+            st.info("No learners to delete.")
         else:
-            del_barcode = st.text_input("Enter barcode", key="del_barcode")
-            confirm = st.checkbox("Confirm delete", key="confirm_del_barcode")
-            if st.button("Delete ❌", use_container_width=True, disabled=not confirm):
-                b = del_barcode.strip()
-                if not b:
-                    st.error("Please enter a barcode.")
+            # Build labels for selection
+            df_latest["_label"] = df_latest.apply(lambda r: f"{label_for_row(r)}  •  [{str(r.get('Barcode','')).strip()}]", axis=1)
+            options = df_latest["_label"].tolist()
+            sel = st.selectbox("Select learner", options, key="del_sel")
+
+            confirm = st.checkbox("I understand this will permanently remove the learner.", key="del_confirm")
+            if st.button("Delete selected learner ❌", use_container_width=True, disabled=not confirm):
+                idx = df_latest.index[df_latest["_label"] == sel].tolist()
+                if not idx:
+                    st.error("Could not find that learner (please refresh).")
                 else:
-                    before = len(df_for_delete)
-                    df2 = df_for_delete[df_for_delete["Barcode"].astype(str).apply(_norm) != _norm(b)].drop(columns=["RowID"])
-                    df2 = df2.reset_index(drop=True)
-                    after = len(df2)
-                    if after == before:
-                        st.error("Barcode not found.")
-                    else:
-                        save_sheet(df2, csv_path)
-                        st.success(f"Deleted {before - after} learner(s) ✅")
-                        st.rerun()
+                    df_latest = df_latest.drop(index=idx[0]).reset_index(drop=True)
+                    df_latest = df_latest.drop(columns=["_label"], errors="ignore")
+                    save_sheet(df_latest, csv_path)
+                    st.success("Learner deleted ✅")
+                    st.rerun()
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.divider()
 
-    # =========================
-    # 3) Bottom: Dates + WhatsApp
-    # =========================
-    st.markdown('<div class="manage-card">', unsafe_allow_html=True)
-    st.markdown('<p class="manage-title">📅 Dates</p>', unsafe_allow_html=True)
-
-    colA, colB, colC = st.columns([2, 1, 1], gap="large")
+    # 3) Bottom: Dates + WhatsApp test (as you requested)
+    st.markdown("### 📅 Dates")
+    colA, colB, colC = st.columns([2, 1, 1])
     with colA:
         new_date = st.text_input("New date label (e.g., 19-Aug)", key="manage_newdate")
     with colB:
         if st.button("Add date column", use_container_width=True):
             if new_date.strip():
-                ensure_date_column(df, new_date.strip())
-                save_sheet(df, csv_path)
+                df2 = load_sheet(csv_path)
+                ensure_date_column(df2, new_date.strip())
+                save_sheet(df2, csv_path)
                 st.success(f"Added column {new_date.strip()} ✅")
                 st.rerun()
     with colC:
         if st.button("➕ Add NEXT SATURDAY", use_container_width=True):
+            df2 = load_sheet(csv_path)
             ns = next_saturday_from()
-            if ns in df.columns:
+            if ns in df2.columns:
                 st.info(f"{ns} already exists.")
             else:
-                ensure_date_column(df, ns)
-                save_sheet(df, csv_path)
+                ensure_date_column(df2, ns)
+                save_sheet(df2, csv_path)
                 st.success(f"Added column {ns} ✅")
                 st.rerun()
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.divider()
 
-    st.markdown('<div class="manage-card">', unsafe_allow_html=True)
-    st.markdown('<p class="manage-title">📩 WhatsApp Test (Twilio)</p>', unsafe_allow_html=True)
+    with st.expander("📩 WhatsApp Test (Twilio)", expanded=True):
+        if Client is None:
+            st.warning("Twilio is not installed. Add `twilio` to requirements.txt.")
+        else:
+            test_to = st.text_input("Test recipient number (E.164)", value=WHATSAPP_RECIPIENTS[0] if WHATSAPP_RECIPIENTS else "+27...")
+            test_msg = st.text_area("Message", value="Hello! This is a test message from the Tutor Class Attendance app ✅")
 
-    if Client is None:
-        st.warning("Twilio is not installed. Add `twilio` to requirements.txt.")
-    else:
-        test_to = st.text_input("Test recipient number (E.164)", value=WHATSAPP_RECIPIENTS[0] if WHATSAPP_RECIPIENTS else "+27...")
-        test_msg = st.text_area("Message", value="Hello! This is a test message from the Tutor Class Attendance app ✅")
-       if st.button("Send Test WhatsApp", use_container_width=True):
-    ok, info = send_whatsapp_message([test_to], test_msg)
-    if ok:
-        st.success(info)
-    else:
-        st.error(info)
-
-    st.markdown("</div>", unsafe_allow_html=True)
+            if st.button("Send Test WhatsApp", use_container_width=True):
+                ok, info = send_whatsapp_message([test_to], test_msg)
+                if ok:
+                    st.success(info)
+                else:
+                    st.error(info)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-
-
-
-
-
-
-
-
-
+st.markdown(
+    """
+    <hr style="margin-top:2rem; margin-bottom:0.5rem;">
+    <p style="text-align:center; font-size:12px; color:#9ca3af;">
+        “Walk each step steadily, and you will not lose your way.” – Jing Si Aphorism
+    </p>
+    """,
+    unsafe_allow_html=True,
+)
