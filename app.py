@@ -337,8 +337,20 @@ st.set_page_config(page_title="Tutor Class Attendance Register 2026", page_icon=
 
 st.markdown("""
 <style>
+/* Overall page base font */
+html, body, [class*="css"]  { 
+    font-size: 17px !important;   /* was smaller; try 17 or 18 */
+}
+
+/* Page container spacing */
 main .block-container { padding-top: 1rem; }
 
+/* Headings */
+h1 { font-size: 2.2rem !important; }
+h2 { font-size: 2.0rem !important; }
+h3 { font-size: 1.6rem !important; }
+
+/* Section card */
 .section-card {
     background: #ffffff;
     padding: 18px 22px;
@@ -347,14 +359,32 @@ main .block-container { padding-top: 1rem; }
     box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
     margin-bottom: 1.2rem;
 }
+
+/* KPI cards */
 .stat-card {
-    padding: 12px 16px;
+    padding: 14px 18px;
     border: 1px solid #eee;
-    border-radius: 12px;
+    border-radius: 14px;
     background: #fafafa;
 }
-.kpi {font-size: 28px; font-weight: 700;}
+.kpi {
+    font-size: 34px !important;   /* was 28 */
+    font-weight: 800;
+}
 
+/* Tabs label size */
+button[data-baseweb="tab"] {
+    font-size: 16px !important;
+    padding-top: 10px !important;
+    padding-bottom: 10px !important;
+}
+
+/* Inputs */
+input, textarea {
+    font-size: 16px !important;
+}
+
+/* Manage cards */
 .manage-card {
     background: #ffffff;
     padding: 16px 18px;
@@ -365,10 +395,14 @@ main .block-container { padding-top: 1rem; }
 }
 .manage-title {
     margin: 0 0 8px 0;
-    font-size: 15px;
-    font-weight: 700;
+    font-size: 17px !important;
+    font-weight: 800;
 }
-.small-help { color:#667085; font-size: 13px; margin-top: -6px; }
+.small-help {
+    color:#667085;
+    font-size: 14px !important;
+    margin-top: -6px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -937,3 +971,4 @@ with tabs[5]:
 
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
+
