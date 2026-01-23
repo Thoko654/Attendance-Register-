@@ -3,6 +3,7 @@
 
 import os
 import json
+import base64
 from pathlib import Path
 from datetime import datetime, timedelta, time as dtime
 from zoneinfo import ZoneInfo
@@ -70,14 +71,6 @@ def today_labels():
 
 def is_saturday_class_day() -> bool:
     return now_local().weekday() == 5
-
-def next_saturday_from(base: datetime | None = None) -> str:
-    base = base or now_local()
-    days_ahead = (5 - base.weekday()) % 7
-    if days_ahead == 0:
-        days_ahead = 7
-    dt = base + timedelta(days=days_ahead)
-    return f"{int(dt.strftime('%d'))}-{dt.strftime('%b')}"
 
 def label_for_row(r: pd.Series) -> str:
     name = str(r.get("Name", "")).strip()
@@ -334,21 +327,18 @@ def build_grades_export(df: pd.DataFrame, date_sel: str, grades: list[str], grad
     return summary_df.drop(columns=["Section","Name","Surname","Barcode","Status"]), combined_export_df
 
 
-# ------------------ DB LOAD (simple) ------------------
+# ------------------ DB LOAD ------------------
 def load_wide_sheet(db_path: Path) -> pd.DataFrame:
-    # Streamlit reruns automatically after callbacks; no need to call st.rerun() inside on_change.
     return get_wide_sheet(db_path)
 
 
 # ------------------ UI ------------------
 st.set_page_config(page_title="Tutor Class Attendance Register 2026", page_icon="✅", layout="wide")
 
-st.markdown(
-    """
+st.markdown("""
 <style>
-.stat-card {padding: 12px 16px; border: 1px solid #eee; border-radius: 12px; background: #fafafa;}
-.kpi {font-size: 28px; font-weight: 700;}
-main .block-container { padding-top: 1.5rem; }
+main .block-container { padding-top: 1rem; }
+
 .section-card {
     background: #ffffff;
     padding: 18px 22px;
@@ -357,6 +347,14 @@ main .block-container { padding-top: 1.5rem; }
     box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
     margin-bottom: 1.2rem;
 }
+.stat-card {
+    padding: 12px 16px;
+    border: 1px solid #eee;
+    border-radius: 12px;
+    background: #fafafa;
+}
+.kpi {font-size: 28px; font-weight: 700;}
+
 .manage-card {
     background: #ffffff;
     padding: 16px 18px;
@@ -366,43 +364,47 @@ main .block-container { padding-top: 1.5rem; }
     margin-bottom: 14px;
 }
 .manage-title {
-    margin: 0 0 10px 0;
-    font-size: 16px;
+    margin: 0 0 8px 0;
+    font-size: 15px;
     font-weight: 700;
 }
+.small-help { color:#667085; font-size: 13px; margin-top: -6px; }
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
-logo_col1, logo_col2, logo_col3 = st.columns([3, 2, 3])
-with logo_col2:
-    if Path("tzu_chi_logo.png").exists():
-        st.image("tzu_chi_logo.png", width=200)
+# ---------- HEADER (compact + centred) ----------
+logo_b64 = ""
+if Path("tzu_chi_logo.png").exists():
+    logo_b64 = base64.b64encode(Path("tzu_chi_logo.png").read_bytes()).decode("utf-8")
 
-st.markdown("<h1 style='text-align:center; margin-bottom:-5px;'>Tutor Class Attendance Register 2026</h1>", unsafe_allow_html=True)
-st.markdown(f"<p style='text-align:center; color:#666;'>Today: <b>{today_col_label()}</b> · Timezone: <b>{APP_TZ}</b></p>", unsafe_allow_html=True)
+st.markdown(f"""
+<div style="text-align:center; margin: 0.25rem 0 0.8rem 0;">
+    {"<img src='data:image/png;base64," + logo_b64 + "' width='130' style='margin-bottom: 6px;'/>" if logo_b64 else ""}
+    <h2 style="margin: 0.2rem 0;">Tutor Class Attendance Register 2026</h2>
+    <p style="margin:0; color:#666; font-size:14px;">
+        Today: <b>{today_col_label()}</b> · Timezone: <b>{APP_TZ}</b>
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
-st.markdown(
-    """
-    <div style="
-        margin: 0 auto 1.5rem auto;
-        max-width: 900px;
-        padding: 10px 18px;
-        border-radius: 999px;
-        background: #f5f7fa;
-        border: 1px solid #e4e7ec;
-        text-align: center;
-        font-size: 14px;
-        color: #555;
-    ">
-        📚 <b>Saturday Tutor Class Attendance</b> · Scan learner barcodes to mark
-        <b>IN / OUT</b> and track participation over time.
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+# purpose pill (smaller + calmer)
+st.markdown("""
+<div style="
+    margin: 0 auto 0.9rem auto;
+    max-width: 820px;
+    padding: 8px 16px;
+    border-radius: 999px;
+    background: #f8fafc;
+    border: 1px solid #e5e7eb;
+    text-align: center;
+    font-size: 13px;
+    color: #555;
+">
+📷 <b>Saturday Tutor Class</b> · Scan barcodes to mark <b>IN / OUT</b> and track attendance.
+</div>
+""", unsafe_allow_html=True)
 
+# ---------- SIDEBAR ----------
 with st.sidebar:
     st.header("Settings")
     if Path("tzu_chi_logo.png").exists():
@@ -423,6 +425,8 @@ with st.sidebar:
     st.markdown("### WhatsApp Recipients")
     st.write(WHATSAPP_RECIPIENTS)
 
+# Divider before tabs (makes it feel like main menu)
+st.divider()
 tabs = st.tabs(["📷 Scan", "📅 Today", "🏫 Grades", "📚 History", "📈 Tracking", "🛠 Manage"])
 
 
@@ -461,6 +465,7 @@ with tabs[0]:
     present_today = (df_scan[today_label].astype(str).str.strip() == "1").sum() if total_learners else 0
     absent_today = total_learners - present_today
 
+    st.subheader("📊 Today at a glance")
     k1, k2, k3 = st.columns(3)
     with k1:
         st.markdown(f'<div class="stat-card"><b>Total learners</b><div class="kpi">{total_learners}</div></div>', unsafe_allow_html=True)
@@ -469,7 +474,8 @@ with tabs[0]:
     with k3:
         st.markdown(f'<div class="stat-card"><b>Absent today</b><div class="kpi">{absent_today}</div></div>', unsafe_allow_html=True)
 
-    st.subheader("Scan")
+    st.divider()
+    st.subheader("📷 Scan learner")
 
     def mark_scan_in_out_sqlite(barcode: str) -> tuple[bool, str]:
         barcode = str(barcode).strip()
@@ -518,8 +524,6 @@ with tabs[0]:
 
         return True, "\n".join(msgs)
 
-    # ✅ Fix: DO NOT call st.rerun() inside this callback (it causes the warning).
-    # Streamlit already reruns after on_change automatically.
     def handle_scan():
         scan_value = st.session_state.get("scan_box", "").strip()
         if not scan_value:
@@ -531,20 +535,20 @@ with tabs[0]:
             ok, msg = mark_scan_in_out_sqlite(scan_value)
             st.session_state["scan_feedback"] = ("ok" if ok else "error", msg)
 
-        st.session_state["scan_box"] = ""  # clear input box
+        st.session_state["scan_box"] = ""
 
     st.text_input("Focus here and scan…", key="scan_box", label_visibility="collapsed", on_change=handle_scan)
 
-    # Show the last scan result (persisted across rerun)
     fb = st.session_state.pop("scan_feedback", None)
     if fb:
         status, msg = fb
         (st.success if status == "ok" else st.error)(msg)
 
+    st.divider()
     _, date_str_now, _, _ = today_labels()
     current_in = get_currently_in(db_path, date_str_now)
 
-    st.markdown(f"### Currently IN today ({date_str_now})")
+    st.subheader(f"🟢 Currently IN today ({date_str_now})")
     if current_in.empty:
         st.caption("No one is currently IN.")
     else:
@@ -765,16 +769,17 @@ with tabs[4]:
 with tabs[5]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Manage Learners / Barcodes")
+    st.caption("Use this section to import, edit, remove learners, and test WhatsApp sending.")
 
     # Always read from DB
     df = get_learners_df(db_path).fillna("").astype(str)
-
     if "Date Of Birth" not in df.columns:
         df["Date Of Birth"] = ""
 
-    # ------------------ IMPORT CSV ------------------
+    # IMPORT CSV
     st.markdown('<div class="manage-card">', unsafe_allow_html=True)
-    st.markdown('<p class="manage-title">📥 Import learners from CSV</p>', unsafe_allow_html=True)
+    st.markdown('<p class="manage-title">📥 Bulk Import (CSV)</p>', unsafe_allow_html=True)
+    st.markdown('<div class="small-help">Upload a CSV to replace all learners or merge updates by barcode.</div>', unsafe_allow_html=True)
 
     csv_file = st.file_uploader("Upload a learners CSV", type=["csv"], key="import_csv_manage")
 
@@ -782,27 +787,14 @@ with tabs[5]:
         import_df = import_df.copy()
         import_df.columns = [str(c).strip() for c in import_df.columns]
         mappings = {
-            "barcode": "Barcode",
-            "bar code": "Barcode",
-            "id": "Barcode",
-            "student id": "Barcode",
-            "name": "Name",
-            "first name": "Name",
-            "firstname": "Name",
-            "surname": "Surname",
-            "last name": "Surname",
-            "lastname": "Surname",
-            "grade": "Grade",
-            "class": "Grade",
-            "area": "Area",
-            "location": "Area",
-            "date of birth": "Date Of Birth",
-            "dob": "Date Of Birth",
-            "birthdate": "Date Of Birth",
-            "birthday": "Date Of Birth",
+            "barcode": "Barcode", "bar code": "Barcode", "id": "Barcode", "student id": "Barcode",
+            "name": "Name", "first name": "Name", "firstname": "Name",
+            "surname": "Surname", "last name": "Surname", "lastname": "Surname",
+            "grade": "Grade", "class": "Grade",
+            "area": "Area", "location": "Area",
+            "date of birth": "Date Of Birth", "dob": "Date Of Birth", "birthdate": "Date Of Birth", "birthday": "Date Of Birth",
         }
-        new_cols = {c: mappings.get(c.lower(), c) for c in import_df.columns}
-        import_df.rename(columns=new_cols, inplace=True)
+        import_df.rename(columns={c: mappings.get(c.lower(), c) for c in import_df.columns}, inplace=True)
         return import_df
 
     import_mode = st.radio(
@@ -852,8 +844,7 @@ with tabs[5]:
 
                             current.update(import_df)
                             merged = pd.concat([current, import_df[~import_df.index.isin(current.index)]], axis=0)
-                            merged = merged.reset_index(drop=True)
-                            merged = merged.drop(columns=["_bnorm"], errors="ignore")
+                            merged = merged.reset_index(drop=True).drop(columns=["_bnorm"], errors="ignore")
 
                         replace_learners_from_df(db_path, merged)
                         st.success(f"Merged {len(import_df)} rows into DB ✅")
@@ -869,10 +860,10 @@ with tabs[5]:
     if "Date Of Birth" not in df.columns:
         df["Date Of Birth"] = ""
 
-    # ------------------ EDIT TABLE (like before) ------------------
+    # EDIT TABLE
     st.markdown('<div class="manage-card">', unsafe_allow_html=True)
-    st.markdown('<p class="manage-title">✏️ Learner list (editable)</p>', unsafe_allow_html=True)
-    st.caption("Edit learners in the table, add rows at the bottom, then click Save changes.")
+    st.markdown('<p class="manage-title">✏️ Edit Learners</p>', unsafe_allow_html=True)
+    st.markdown('<div class="small-help">Edit the table, add rows at the bottom, then click <b>Save changes</b>.</div>', unsafe_allow_html=True)
 
     editable_cols = ["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]
     view_df = df.copy().reset_index(drop=True)
@@ -912,9 +903,10 @@ with tabs[5]:
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ------------------ QUICK DELETE ------------------
+    # QUICK DELETE
     st.markdown('<div class="manage-card">', unsafe_allow_html=True)
-    st.markdown('<p class="manage-title">🗑 Delete learner</p>', unsafe_allow_html=True)
+    st.markdown('<p class="manage-title">🗑 Remove Learner</p>', unsafe_allow_html=True)
+    st.markdown('<div class="small-help">Enter a barcode and confirm before deleting.</div>', unsafe_allow_html=True)
 
     del_barcode = st.text_input("Enter barcode", key="del_barcode")
     confirm = st.checkbox("Confirm delete", key="confirm_del_barcode")
@@ -928,21 +920,20 @@ with tabs[5]:
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ------------------ WhatsApp test ------------------
+    # WhatsApp test
     st.markdown('<div class="manage-card">', unsafe_allow_html=True)
-    st.markdown('<p class="manage-title">📩 WhatsApp Test (Twilio)</p>', unsafe_allow_html=True)
+    st.markdown('<p class="manage-title">📩 WhatsApp Connection Test (Twilio)</p>', unsafe_allow_html=True)
+    st.markdown('<div class="small-help">Send a test message to confirm Twilio is working.</div>', unsafe_allow_html=True)
 
     if Client is None:
         st.warning("Twilio is not installed. Add `twilio` to requirements.txt.")
     else:
         test_to = st.text_input("Test recipient number (E.164)", value=WHATSAPP_RECIPIENTS[0] if WHATSAPP_RECIPIENTS else "+27...")
         test_msg = st.text_area("Message", value="Hello! This is a test message from the Tutor Class Attendance app ✅")
-    if st.button("Send Test WhatsApp", use_container_width=True):
-        ok, info = send_whatsapp_message([test_to], test_msg)
-        if ok:
-            st.success(info)
-        else:
-            st.error(info)
+
+        if st.button("Send Test WhatsApp", use_container_width=True):
+            ok, info = send_whatsapp_message([test_to], test_msg)
+            (st.success if ok else st.error)(info)
 
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
