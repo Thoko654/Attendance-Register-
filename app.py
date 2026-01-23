@@ -334,18 +334,10 @@ def build_grades_export(df: pd.DataFrame, date_sel: str, grades: list[str], grad
     return summary_df.drop(columns=["Section","Name","Surname","Barcode","Status"]), combined_export_df
 
 
-# ------------------ DB LOAD (cache-busted) ------------------
+# ------------------ DB LOAD (simple) ------------------
 def load_wide_sheet(db_path: Path) -> pd.DataFrame:
-    """
-    Cache-busted loader to ensure changes in Manage tab reflect immediately.
-    """
-    version = st.session_state.get("db_version", 0)
-    _ = version  # used to bust cache in Streamlit reruns
-    df = get_wide_sheet(db_path)
-    return df
-
-def bump_db_version():
-    st.session_state["db_version"] = st.session_state.get("db_version", 0) + 1
+    # Streamlit reruns automatically after callbacks; no need to call st.rerun() inside on_change.
+    return get_wide_sheet(db_path)
 
 
 # ------------------ UI ------------------
@@ -364,6 +356,19 @@ main .block-container { padding-top: 1.5rem; }
     border: 1px solid #e5e7eb;
     box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
     margin-bottom: 1.2rem;
+}
+.manage-card {
+    background: #ffffff;
+    padding: 16px 18px;
+    border-radius: 14px;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 6px 16px rgba(15,23,42,0.04);
+    margin-bottom: 14px;
+}
+.manage-title {
+    margin: 0 0 10px 0;
+    font-size: 16px;
+    font-weight: 700;
 }
 </style>
 """,
@@ -479,59 +484,67 @@ with tabs[0]:
         if not matches:
             return False, "Barcode not found. Add it to the correct learner in Manage."
 
-        date_label, date_str, time_str, ts_iso = today_labels()
+        date_label, date_str2, time_str2, ts_iso2 = today_labels()
         add_class_date(db_path, date_label)
 
         msgs = []
         for idx in matches:
             row = df.loc[idx]
-            real_barcode = str(row.get("Barcode","")).strip()
-            action = determine_next_action(db_path, real_barcode, date_str)
+            real_barcode = str(row.get("Barcode", "")).strip()
+            action = determine_next_action(db_path, real_barcode, date_str2)
 
-            insert_present_mark(db_path, date_label, date_str, time_str, real_barcode)
+            insert_present_mark(db_path, date_label, date_str2, time_str2, real_barcode)
 
             append_inout_log(
                 db_path=db_path,
-                ts_iso=ts_iso,
-                date_str=date_str,
-                time_str=time_str,
+                ts_iso=ts_iso2,
+                date_str=date_str2,
+                time_str=time_str2,
                 barcode=real_barcode,
-                name=str(row.get("Name","")),
-                surname=str(row.get("Surname","")),
+                name=str(row.get("Name", "")),
+                surname=str(row.get("Surname", "")),
                 action=action
             )
 
             who = label_for_row(row)
-            msgs.append(f"{who} [{real_barcode}] marked {action} at {time_str} ({date_str}).")
+            msgs.append(f"{who} [{real_barcode}] marked {action} at {time_str2} ({date_str2}).")
 
-        current_in = get_currently_in(db_path, date_str)
+        current_in = get_currently_in(db_path, date_str2)
         msgs.append("")
-        msgs.append(f"Currently IN today ({date_str}): {len(current_in)}")
+        msgs.append(f"Currently IN today ({date_str2}): {len(current_in)}")
         for _, r in current_in.iterrows():
             who2 = (str(r["Name"]).strip() + " " + str(r["Surname"]).strip()).strip() or f"[{r['Barcode']}]"
             msgs.append(f"  • {who2} [{r['Barcode']}]")
 
         return True, "\n".join(msgs)
 
+    # ✅ Fix: DO NOT call st.rerun() inside this callback (it causes the warning).
+    # Streamlit already reruns after on_change automatically.
     def handle_scan():
         scan_value = st.session_state.get("scan_box", "").strip()
         if not scan_value:
             return
+
         if not is_saturday_class_day():
-            st.error("Today is not a class day. Scans are only allowed on Saturdays.")
+            st.session_state["scan_feedback"] = ("error", "Today is not a class day. Scans are only allowed on Saturdays.")
         else:
             ok, msg = mark_scan_in_out_sqlite(scan_value)
-            st.success(msg) if ok else st.error(msg)
-        st.session_state["scan_box"] = ""
-        bump_db_version()
-        st.rerun()
+            st.session_state["scan_feedback"] = ("ok" if ok else "error", msg)
+
+        st.session_state["scan_box"] = ""  # clear input box
 
     st.text_input("Focus here and scan…", key="scan_box", label_visibility="collapsed", on_change=handle_scan)
 
-    _, date_str, _, _ = today_labels()
-    current_in = get_currently_in(db_path, date_str)
+    # Show the last scan result (persisted across rerun)
+    fb = st.session_state.pop("scan_feedback", None)
+    if fb:
+        status, msg = fb
+        (st.success if status == "ok" else st.error)(msg)
 
-    st.markdown(f"### Currently IN today ({date_str})")
+    _, date_str_now, _, _ = today_labels()
+    current_in = get_currently_in(db_path, date_str_now)
+
+    st.markdown(f"### Currently IN today ({date_str_now})")
     if current_in.empty:
         st.caption("No one is currently IN.")
     else:
@@ -747,268 +760,175 @@ with tabs[4]:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-    # ------------------ Manage Tab ------------------
-    with tabs[5]:
-        st.markdown('<div class="section-card">', unsafe_allow_html=True)
-        st.subheader("Manage Learners / Barcodes")
 
-        st.markdown(
-            """
-            <style>
-            .manage-card {
-                background: #ffffff;
-                padding: 16px 18px;
-                border-radius: 14px;
-                border: 1px solid #e5e7eb;
-                box-shadow: 0 6px 16px rgba(15,23,42,0.04);
-                margin-bottom: 14px;
-            }
-            .manage-title {
-                margin: 0 0 10px 0;
-                font-size: 16px;
-                font-weight: 700;
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
+# ------------------ Manage Tab ------------------
+with tabs[5]:
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.subheader("Manage Learners / Barcodes")
 
-        # Always read from DB
-        df = get_learners_df(db_path).fillna("").astype(str)
+    # Always read from DB
+    df = get_learners_df(db_path).fillna("").astype(str)
 
-        # Make sure Date Of Birth exists
-        if "Date Of Birth" not in df.columns:
-            df["Date Of Birth"] = ""
+    if "Date Of Birth" not in df.columns:
+        df["Date Of Birth"] = ""
 
-        # ------------------ IMPORT CSV ------------------
-        st.markdown('<div class="manage-card">', unsafe_allow_html=True)
-        st.markdown('<p class="manage-title">📥 Import learners from CSV</p>', unsafe_allow_html=True)
+    # ------------------ IMPORT CSV ------------------
+    st.markdown('<div class="manage-card">', unsafe_allow_html=True)
+    st.markdown('<p class="manage-title">📥 Import learners from CSV</p>', unsafe_allow_html=True)
 
-        csv_file = st.file_uploader("Upload a learners CSV", type=["csv"], key="import_csv_manage")
+    csv_file = st.file_uploader("Upload a learners CSV", type=["csv"], key="import_csv_manage")
 
+    def _normalize_cols(import_df: pd.DataFrame) -> pd.DataFrame:
+        import_df = import_df.copy()
+        import_df.columns = [str(c).strip() for c in import_df.columns]
+        mappings = {
+            "barcode": "Barcode",
+            "bar code": "Barcode",
+            "id": "Barcode",
+            "student id": "Barcode",
+            "name": "Name",
+            "first name": "Name",
+            "firstname": "Name",
+            "surname": "Surname",
+            "last name": "Surname",
+            "lastname": "Surname",
+            "grade": "Grade",
+            "class": "Grade",
+            "area": "Area",
+            "location": "Area",
+            "date of birth": "Date Of Birth",
+            "dob": "Date Of Birth",
+            "birthdate": "Date Of Birth",
+            "birthday": "Date Of Birth",
+        }
+        new_cols = {c: mappings.get(c.lower(), c) for c in import_df.columns}
+        import_df.rename(columns=new_cols, inplace=True)
+        return import_df
 
-        def _normalize_cols(import_df: pd.DataFrame) -> pd.DataFrame:
-            import_df = import_df.copy()
-            import_df.columns = [str(c).strip() for c in import_df.columns]
+    import_mode = st.radio(
+        "Import mode",
+        ["Replace ALL learners (recommended for first upload)", "Merge (add/update by barcode)"],
+        horizontal=False,
+        key="import_mode",
+    )
 
-            mappings = {
-                "barcode": "Barcode",
-                "bar code": "Barcode",
-                "id": "Barcode",
-                "student id": "Barcode",
+    if csv_file is not None:
+        try:
+            import_df = pd.read_csv(csv_file).fillna("").astype(str)
+            import_df = _normalize_cols(import_df)
 
-                "name": "Name",
-                "first name": "Name",
-                "firstname": "Name",
+            required = ["Barcode", "Name", "Surname"]
+            missing = [c for c in required if c not in import_df.columns]
+            if missing:
+                st.error(f"CSV is missing required columns: {missing}")
+            else:
+                for c in ["Grade", "Area", "Date Of Birth"]:
+                    if c not in import_df.columns:
+                        import_df[c] = ""
 
-                "surname": "Surname",
-                "last name": "Surname",
-                "lastname": "Surname",
+                import_df = import_df[["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]].copy()
+                import_df["Barcode"] = import_df["Barcode"].astype(str).str.strip()
+                import_df = import_df[import_df["Barcode"] != ""].reset_index(drop=True)
 
-                "grade": "Grade",
-                "class": "Grade",
+                import_df["_bnorm"] = import_df["Barcode"].astype(str).apply(norm_barcode)
+                import_df = import_df.drop_duplicates(subset=["_bnorm"], keep="first").drop(columns=["_bnorm"])
 
-                "area": "Area",
-                "location": "Area",
-
-                "date of birth": "Date Of Birth",
-                "dob": "Date Of Birth",
-                "birthdate": "Date Of Birth",
-                "birthday": "Date Of Birth",
-            }
-
-            new_cols = {}
-            for c in import_df.columns:
-                new_cols[c] = mappings.get(c.lower(), c)
-
-            import_df.rename(columns=new_cols, inplace=True)
-            return import_df
-
-
-        # Choose import behavior
-        import_mode = st.radio(
-            "Import mode",
-            ["Replace ALL learners (recommended for first upload)", "Merge (add/update by barcode)"],
-            horizontal=False,
-            key="import_mode",
-        )
-
-        if csv_file is not None:
-            try:
-                import_df = pd.read_csv(csv_file).fillna("").astype(str)
-                import_df = _normalize_cols(import_df)
-
-                required = ["Barcode", "Name", "Surname"]
-                missing = [c for c in required if c not in import_df.columns]
-                if missing:
-                    st.error(f"CSV is missing required columns: {missing}")
+                if len(import_df) == 0:
+                    st.error("No valid rows found (all barcodes empty).")
                 else:
-                    # Ensure optional cols exist
-                    for c in ["Grade", "Area", "Date Of Birth"]:
-                        if c not in import_df.columns:
-                            import_df[c] = ""
-
-                    import_df = import_df[["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]].copy()
-                    import_df["Barcode"] = import_df["Barcode"].astype(str).str.strip()
-                    import_df = import_df[import_df["Barcode"] != ""].reset_index(drop=True)
-
-                    # Deduplicate by normalized barcode
-                    import_df["_bnorm"] = import_df["Barcode"].astype(str).apply(norm_barcode)
-                    import_df = import_df.drop_duplicates(subset=["_bnorm"], keep="first").drop(columns=["_bnorm"])
-
-                    if len(import_df) == 0:
-                        st.error("No valid rows found (all barcodes empty).")
+                    if import_mode.startswith("Replace"):
+                        replace_learners_from_df(db_path, import_df)
+                        st.success(f"Replaced learners with {len(import_df)} rows ✅")
                     else:
-                        if import_mode.startswith("Replace"):
-                            replace_learners_from_df(db_path, import_df)
-                            st.success(f"Replaced learners with {len(import_df)} rows ✅")
+                        current = get_learners_df(db_path).fillna("").astype(str)
+                        if len(current) == 0:
+                            merged = import_df
                         else:
-                            # Merge = add/update by barcode (preserve existing rows not in CSV)
-                            current = get_learners_df(db_path).fillna("").astype(str)
-                            if len(current) == 0:
-                                merged = import_df
-                            else:
-                                current["_bnorm"] = current["Barcode"].astype(str).apply(norm_barcode)
-                                import_df["_bnorm"] = import_df["Barcode"].astype(str).apply(norm_barcode)
+                            current["_bnorm"] = current["Barcode"].astype(str).apply(norm_barcode)
+                            import_df["_bnorm"] = import_df["Barcode"].astype(str).apply(norm_barcode)
 
-                                # update existing + keep others
-                                current = current.set_index("_bnorm")
-                                import_df = import_df.set_index("_bnorm")
+                            current = current.set_index("_bnorm")
+                            import_df = import_df.set_index("_bnorm")
 
-                                current.update(import_df)  # update matched rows
-                                merged = pd.concat([current, import_df[~import_df.index.isin(current.index)]], axis=0)
-                                merged = merged.reset_index(drop=True)
+                            current.update(import_df)
+                            merged = pd.concat([current, import_df[~import_df.index.isin(current.index)]], axis=0)
+                            merged = merged.reset_index(drop=True)
+                            merged = merged.drop(columns=["_bnorm"], errors="ignore")
 
-                                # Clean temp
-                                if "_bnorm" in merged.columns:
-                                    merged = merged.drop(columns=["_bnorm"], errors="ignore")
+                        replace_learners_from_df(db_path, merged)
+                        st.success(f"Merged {len(import_df)} rows into DB ✅")
 
-                            replace_learners_from_df(db_path, merged)
-                            st.success(f"Merged {len(import_df)} rows into DB ✅")
+                    st.rerun()
+        except Exception as e:
+            st.error(f"Failed to import CSV: {e}")
 
-                        st.rerun()
-            except Exception as e:
-                st.error(f"Failed to import CSV: {e}")
+    st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown("</div>", unsafe_allow_html=True)
+    # Reload after import
+    df = get_learners_df(db_path).fillna("").astype(str)
+    if "Date Of Birth" not in df.columns:
+        df["Date Of Birth"] = ""
 
-        # Reload df after possible import
-        df = get_learners_df(db_path).fillna("").astype(str)
-        if "Date Of Birth" not in df.columns:
-            df["Date Of Birth"] = ""
+    # ------------------ EDIT TABLE (like before) ------------------
+    st.markdown('<div class="manage-card">', unsafe_allow_html=True)
+    st.markdown('<p class="manage-title">✏️ Learner list (editable)</p>', unsafe_allow_html=True)
+    st.caption("Edit learners in the table, add rows at the bottom, then click Save changes.")
 
-        # ------------------ EDIT TABLE (like before) ------------------
-        st.markdown('<div class="manage-card">', unsafe_allow_html=True)
-        st.markdown('<p class="manage-title">✏️ Learner list (editable)</p>', unsafe_allow_html=True)
-        st.caption("Edit learners in the table, add rows at the bottom, then click Save changes.")
+    editable_cols = ["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]
+    view_df = df.copy().reset_index(drop=True)
+    view_df.insert(0, "RowID", range(len(view_df)))
 
-        editable_cols = ["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]
+    edited = st.data_editor(
+        view_df[["RowID"] + editable_cols],
+        use_container_width=True,
+        num_rows="dynamic",
+        key="data_editor_manage",
+    )
 
-        view_df = df.copy().reset_index(drop=True)
-        view_df.insert(0, "RowID", range(len(view_df)))
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        if st.button("💾 Save changes", use_container_width=True):
+            edited_clean = edited.drop(columns=["RowID"]).fillna("").astype(str)
+            edited_clean = edited_clean[~(
+                (edited_clean["Name"].str.strip() == "") &
+                (edited_clean["Surname"].str.strip() == "") &
+                (edited_clean["Barcode"].str.strip() == "")
+            )].reset_index(drop=True)
 
-        edited = st.data_editor(
-            view_df[["RowID"] + editable_cols],
-            use_container_width=True,
-            num_rows="dynamic",
-            key="data_editor_manage",
-        )
-
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            if st.button("💾 Save changes", use_container_width=True):
-                edited_clean = edited.drop(columns=["RowID"]).fillna("").astype(str)
-
-                # Remove completely blank rows
-                edited_clean = edited_clean[~(
-                        (edited_clean["Name"].str.strip() == "") &
-                        (edited_clean["Surname"].str.strip() == "") &
-                        (edited_clean["Barcode"].str.strip() == "")
-                )].reset_index(drop=True)
-
-                # Barcode required
-                if (edited_clean["Barcode"].astype(str).str.strip() == "").any():
-                    st.error("Every learner must have a Barcode. Please fill in missing barcodes.")
+            if (edited_clean["Barcode"].astype(str).str.strip() == "").any():
+                st.error("Every learner must have a Barcode. Please fill in missing barcodes.")
+            else:
+                bnorms = edited_clean["Barcode"].astype(str).apply(norm_barcode)
+                if bnorms.duplicated().any():
+                    st.error("Duplicate barcode detected (same barcode / leading zeros). Fix duplicates before saving.")
                 else:
-                    # Prevent duplicates (normalized)
-                    bnorms = edited_clean["Barcode"].astype(str).apply(norm_barcode)
-                    if bnorms.duplicated().any():
-                        st.error(
-                            "Duplicate barcode detected (same barcode or same barcode with leading zeros). Fix duplicates before saving.")
-                    else:
-                        replace_learners_from_df(db_path, edited_clean)
-                        st.success("Saved ✅")
-                        st.rerun()
-
-        with c2:
-            if st.button("🔄 Reload from DB", use_container_width=True):
-                st.rerun()
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        # ------------------ QUICK ADD / DELETE (optional) ------------------
-        st.markdown('<div class="manage-card">', unsafe_allow_html=True)
-        st.markdown('<p class="manage-title">🛠 Quick Add / Delete</p>', unsafe_allow_html=True)
-
-        left, right = st.columns([2, 1], gap="large")
-
-        with left:
-            st.markdown("#### ➕ Add learner")
-            with st.form("add_learner_form", clear_on_submit=True):
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    new_name = st.text_input("Name")
-                    new_grade = st.text_input("Grade (e.g., 5)")
-                with c2:
-                    new_surname = st.text_input("Surname")
-                    new_area = st.text_input("Area")
-                with c3:
-                    new_barcode = st.text_input("Barcode (required)")
-                    new_dob = st.text_input("Date Of Birth (optional)")
-
-                add_btn = st.form_submit_button("Add learner ✅", use_container_width=True)
-
-            if add_btn:
-                if not new_barcode.strip():
-                    st.error("Barcode is required.")
-                else:
-                    df_check = get_learners_df(db_path)
-                    exists = df_check["Barcode"].astype(str).apply(norm_barcode).eq(
-                        norm_barcode(new_barcode)).any() if len(df_check) else False
-                    if exists:
-                        st.error("That barcode already exists. Please use a unique barcode.")
-                    else:
-                        new_row = {
-                            "Name": new_name.strip(),
-                            "Surname": new_surname.strip(),
-                            "Barcode": new_barcode.strip(),
-                            "Grade": new_grade.strip(),
-                            "Area": new_area.strip(),
-                            "Date Of Birth": new_dob.strip(),
-                        }
-                        df_now = get_learners_df(db_path)
-                        df2 = pd.concat([df_now, pd.DataFrame([new_row])], ignore_index=True)
-                        replace_learners_from_df(db_path, df2)
-                        st.success("Learner added ✅")
-                        st.rerun()
-
-        with right:
-            st.markdown("#### 🗑 Delete learner")
-            del_barcode = st.text_input("Enter barcode", key="del_barcode")
-            confirm = st.checkbox("Confirm delete", key="confirm_del_barcode")
-            if st.button("Delete ❌", use_container_width=True, disabled=not confirm):
-                deleted = delete_learner_by_barcode(db_path, del_barcode.strip())
-                if deleted == 0:
-                    st.error("Barcode not found.")
-                else:
-                    st.success(f"Deleted {deleted} learner(s) ✅")
+                    replace_learners_from_df(db_path, edited_clean)
+                    st.success("Saved ✅")
                     st.rerun()
 
-        st.markdown("</div>", unsafe_allow_html=True)
+    with c2:
+        if st.button("🔄 Reload from DB", use_container_width=True):
+            st.rerun()
 
-        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    # ---------- WhatsApp test ----------
+    # ------------------ QUICK DELETE ------------------
+    st.markdown('<div class="manage-card">', unsafe_allow_html=True)
+    st.markdown('<p class="manage-title">🗑 Delete learner</p>', unsafe_allow_html=True)
+
+    del_barcode = st.text_input("Enter barcode", key="del_barcode")
+    confirm = st.checkbox("Confirm delete", key="confirm_del_barcode")
+    if st.button("Delete ❌", use_container_width=True, disabled=not confirm):
+        deleted = delete_learner_by_barcode(db_path, del_barcode.strip())
+        if deleted == 0:
+            st.error("Barcode not found.")
+        else:
+            st.success(f"Deleted {deleted} learner(s) ✅")
+            st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ------------------ WhatsApp test ------------------
     st.markdown('<div class="manage-card">', unsafe_allow_html=True)
     st.markdown('<p class="manage-title">📩 WhatsApp Test (Twilio)</p>', unsafe_allow_html=True)
 
