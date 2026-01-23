@@ -414,7 +414,7 @@ if Path("tzu_chi_logo.png").exists():
 st.markdown(f"""
 <div style="text-align:center; margin: 0.25rem 0 0.8rem 0;">
     {"<img src='data:image/png;base64," + logo_b64 + "' width='130' style='margin-bottom: 6px;'/>" if logo_b64 else ""}
-    <h2 style="margin: 0.2rem 0;">Tutor Class Attendance Register 2026</h2>
+    <h2 style="margin: 0.2rem 0; font-size: 2.2rem;">Tutor Class Attendance Register 2026</h2>
     <p style="margin:0; color:#666; font-size:14px;">
         Today: <b>{today_col_label()}</b> · Timezone: <b>{APP_TZ}</b>
     </p>
@@ -971,4 +971,5 @@ with tabs[5]:
 
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
+
 
