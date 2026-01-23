@@ -41,7 +41,7 @@ SEND_DAY_WEEKDAY = 5          # Saturday
 SEND_AFTER_TIME = dtime(9, 0) # 09:00
 SEND_WINDOW_HOURS = 12
 
-DEFAULT_GRADE_CAPACITY = 20
+DEFAULT_GRADE_CAPACITY = 15
 
 try:
     from twilio.rest import Client
@@ -971,5 +971,6 @@ with tabs[5]:
 
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
