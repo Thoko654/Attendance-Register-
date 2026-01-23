@@ -937,9 +937,12 @@ with tabs[5]:
     else:
         test_to = st.text_input("Test recipient number (E.164)", value=WHATSAPP_RECIPIENTS[0] if WHATSAPP_RECIPIENTS else "+27...")
         test_msg = st.text_area("Message", value="Hello! This is a test message from the Tutor Class Attendance app ✅")
-        if st.button("Send Test WhatsApp", use_container_width=True):
-            ok, info = send_whatsapp_message([test_to], test_msg)
-            st.success(info) if ok else st.error(info)
+    if st.button("Send Test WhatsApp", use_container_width=True):
+        ok, info = send_whatsapp_message([test_to], test_msg)
+        if ok:
+            st.success(info)
+        else:
+            st.error(info)
 
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
