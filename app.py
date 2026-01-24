@@ -41,7 +41,11 @@ SEND_DAY_WEEKDAY = 5          # Saturday
 SEND_AFTER_TIME = dtime(9, 0) # 09:00
 SEND_WINDOW_HOURS = 12
 
+# ✅ Grade capacity default changed to 15
 DEFAULT_GRADE_CAPACITY = 15
+
+# ✅ Backup file for permanent restore
+BACKUP_LEARNERS_CSV = "learners_backup.csv"
 
 try:
     from twilio.rest import Client
@@ -119,6 +123,49 @@ def get_present_absent(df: pd.DataFrame, date_col: str, grade=None, area=None):
     present = subset[subset[date_col].astype(str).str.strip() == "1"]
     absent = subset[subset[date_col].astype(str).str.strip() != "1"]
     return present, absent
+
+
+# ------------------ ✅ PERMANENT DATA (BACKUP + RESTORE) ------------------
+def save_learners_backup(df_learners: pd.DataFrame):
+    """
+    Save a permanent backup learners CSV (works even when SQLite resets).
+    """
+    try:
+        df_learners.to_csv(BACKUP_LEARNERS_CSV, index=False)
+    except Exception:
+        pass
+
+def restore_learners_if_db_empty(db_path: Path):
+    """
+    If DB is empty (common after Streamlit restart), restore learners from backup CSV.
+    """
+    try:
+        current = get_learners_df(db_path).fillna("").astype(str)
+        if len(current) > 0:
+            return
+
+        backup_path = Path(BACKUP_LEARNERS_CSV)
+        if not backup_path.exists():
+            return
+
+        backup_df = pd.read_csv(backup_path).fillna("").astype(str)
+        required = ["Name", "Surname", "Barcode"]
+        if not all(c in backup_df.columns for c in required):
+            return
+        if len(backup_df) == 0:
+            return
+
+        for c in ["Grade", "Area", "Date Of Birth"]:
+            if c not in backup_df.columns:
+                backup_df[c] = ""
+
+        backup_df = backup_df[["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]].copy()
+        backup_df["Barcode"] = backup_df["Barcode"].astype(str).str.strip()
+        backup_df = backup_df[backup_df["Barcode"] != ""].reset_index(drop=True)
+
+        replace_learners_from_df(db_path, backup_df)
+    except Exception:
+        pass
 
 
 # ------------------ TRACKING ------------------
@@ -337,20 +384,14 @@ st.set_page_config(page_title="Tutor Class Attendance Register 2026", page_icon=
 
 st.markdown("""
 <style>
-/* Overall page base font */
 html, body, [class*="css"]  { 
-    font-size: 17px !important;   /* was smaller; try 17 or 18 */
+    font-size: 17px !important;
 }
-
-/* Page container spacing */
 main .block-container { padding-top: 1rem; }
-
-/* Headings */
 h1 { font-size: 2.2rem !important; }
 h2 { font-size: 2.0rem !important; }
 h3 { font-size: 1.6rem !important; }
 
-/* Section card */
 .section-card {
     background: #ffffff;
     padding: 18px 22px;
@@ -359,8 +400,6 @@ h3 { font-size: 1.6rem !important; }
     box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
     margin-bottom: 1.2rem;
 }
-
-/* KPI cards */
 .stat-card {
     padding: 14px 18px;
     border: 1px solid #eee;
@@ -368,23 +407,17 @@ h3 { font-size: 1.6rem !important; }
     background: #fafafa;
 }
 .kpi {
-    font-size: 34px !important;   /* was 28 */
+    font-size: 34px !important;
     font-weight: 800;
 }
-
-/* Tabs label size */
 button[data-baseweb="tab"] {
     font-size: 16px !important;
     padding-top: 10px !important;
     padding-bottom: 10px !important;
 }
-
-/* Inputs */
 input, textarea {
     font-size: 16px !important;
 }
-
-/* Manage cards */
 .manage-card {
     background: #ffffff;
     padding: 16px 18px;
@@ -406,7 +439,7 @@ input, textarea {
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- HEADER (compact + centred) ----------
+# ---------- HEADER ----------
 logo_b64 = ""
 if Path("tzu_chi_logo.png").exists():
     logo_b64 = base64.b64encode(Path("tzu_chi_logo.png").read_bytes()).decode("utf-8")
@@ -421,7 +454,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# purpose pill (smaller + calmer)
 st.markdown("""
 <div style="
     margin: 0 auto 0.9rem auto;
@@ -449,6 +481,9 @@ with st.sidebar:
 
     init_db(db_path)
 
+    # ✅ Restore learners if DB got wiped
+    restore_learners_if_db_empty(db_path)
+
     st.markdown("### Grade capacity (benchmark)")
     grade_capacity = st.number_input(
         "Capacity per grade",
@@ -459,7 +494,6 @@ with st.sidebar:
     st.markdown("### WhatsApp Recipients")
     st.write(WHATSAPP_RECIPIENTS)
 
-# Divider before tabs (makes it feel like main menu)
 st.divider()
 tabs = st.tabs(["📷 Scan", "📅 Today", "🏫 Grades", "📚 History", "📈 Tracking", "🛠 Manage"])
 
@@ -805,7 +839,6 @@ with tabs[5]:
     st.subheader("Manage Learners / Barcodes")
     st.caption("Use this section to import, edit, remove learners, and test WhatsApp sending.")
 
-    # Always read from DB
     df = get_learners_df(db_path).fillna("").astype(str)
     if "Date Of Birth" not in df.columns:
         df["Date Of Birth"] = ""
@@ -864,6 +897,7 @@ with tabs[5]:
                 else:
                     if import_mode.startswith("Replace"):
                         replace_learners_from_df(db_path, import_df)
+                        save_learners_backup(import_df)  # ✅ backup
                         st.success(f"Replaced learners with {len(import_df)} rows ✅")
                     else:
                         current = get_learners_df(db_path).fillna("").astype(str)
@@ -881,6 +915,7 @@ with tabs[5]:
                             merged = merged.reset_index(drop=True).drop(columns=["_bnorm"], errors="ignore")
 
                         replace_learners_from_df(db_path, merged)
+                        save_learners_backup(merged)  # ✅ backup
                         st.success(f"Merged {len(import_df)} rows into DB ✅")
 
                     st.rerun()
@@ -928,6 +963,7 @@ with tabs[5]:
                     st.error("Duplicate barcode detected (same barcode / leading zeros). Fix duplicates before saving.")
                 else:
                     replace_learners_from_df(db_path, edited_clean)
+                    save_learners_backup(edited_clean)  # ✅ backup
                     st.success("Saved ✅")
                     st.rerun()
 
@@ -949,6 +985,9 @@ with tabs[5]:
         if deleted == 0:
             st.error("Barcode not found.")
         else:
+            # after deletion, refresh backup
+            df_after = get_learners_df(db_path).fillna("").astype(str)
+            save_learners_backup(df_after)
             st.success(f"Deleted {deleted} learner(s) ✅")
             st.rerun()
 
@@ -971,8 +1010,3 @@ with tabs[5]:
 
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
-
-
-
-
-
