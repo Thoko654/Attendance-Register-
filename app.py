@@ -994,19 +994,41 @@ with tabs[5]:
     st.markdown("</div>", unsafe_allow_html=True)
 
     # WhatsApp test
-    st.markdown('<div class="manage-card">', unsafe_allow_html=True)
-    st.markdown('<p class="manage-title">📩 WhatsApp Connection Test (Twilio)</p>', unsafe_allow_html=True)
-    st.markdown('<div class="small-help">Send a test message to confirm Twilio is working.</div>', unsafe_allow_html=True)
-
+   def send_whatsapp_message(to_numbers: list[str], body: str) -> tuple[bool, str]:
     if Client is None:
-        st.warning("Twilio is not installed. Add `twilio` to requirements.txt.")
-    else:
-        test_to = st.text_input("Test recipient number (E.164)", value=WHATSAPP_RECIPIENTS[0] if WHATSAPP_RECIPIENTS else "+27...")
-        test_msg = st.text_area("Message", value="Hello! This is a test message from the Tutor Class Attendance app ✅")
+        return False, "Twilio not installed. Add 'twilio' to requirements.txt."
 
-        if st.button("Send Test WhatsApp", use_container_width=True):
-            ok, info = send_whatsapp_message([test_to], test_msg)
-            (st.success if ok else st.error)(info)
+    sid = os.environ.get("TWILIO_ACCOUNT_SID", "").strip()
+    token = os.environ.get("TWILIO_AUTH_TOKEN", "").strip()
+    wa_from = os.environ.get("TWILIO_WHATSAPP_FROM", "").strip()
 
-    st.markdown("</div>", unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    if not sid or not token or not wa_from:
+        return False, "Missing TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM."
+
+    # Ensure from_ has whatsapp:
+    if not wa_from.startswith("whatsapp:"):
+        wa_from = "whatsapp:" + wa_from
+
+    client = Client(sid, token)
+    sent_any = False
+    results = []
+
+    for n in to_numbers:
+        n = str(n).strip()
+        if not n:
+            continue
+
+        # Ensure to has whatsapp:
+        to_val = n if n.startswith("whatsapp:") else f"whatsapp:{n}"
+
+        try:
+            msg = client.messages.create(from_=wa_from, to=to_val, body=body)
+            sent_any = True
+            results.append(f"{n}: QUEUED (SID {msg.sid}, status {msg.status})")
+        except Exception as e:
+            results.append(f"{n}: FAILED ({e})")
+
+    if sent_any:
+        return True, " | ".join(results)
+    return False, " | ".join(results) if results else "No recipients."
+
