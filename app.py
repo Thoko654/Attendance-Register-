@@ -270,60 +270,39 @@ def send_whatsapp_message(to_numbers: list[str], body: str) -> tuple[bool, str]:
     if Client is None:
         return False, "Twilio not installed. Add 'twilio' to requirements.txt."
 
-    sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
-    token = os.environ.get("TWILIO_AUTH_TOKEN", "")
-    wa_from = os.environ.get("TWILIO_WHATSAPP_FROM", "")
+    sid = os.environ.get("TWILIO_ACCOUNT_SID", "").strip()
+    token = os.environ.get("TWILIO_AUTH_TOKEN", "").strip()
+    wa_from = os.environ.get("TWILIO_WHATSAPP_FROM", "").strip()
 
     if not sid or not token or not wa_from:
         return False, "Missing TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM."
 
+    # Ensure from_ has whatsapp:
+    if not wa_from.startswith("whatsapp:"):
+        wa_from = "whatsapp:" + wa_from
+
     client = Client(sid, token)
     sent_any = False
-    errors = []
+    results = []
 
     for n in to_numbers:
-        n = n.strip()
+        n = str(n).strip()
         if not n:
             continue
+
+        # Ensure to has whatsapp:
+        to_val = n if n.startswith("whatsapp:") else f"whatsapp:{n}"
+
         try:
-            client.messages.create(from_=wa_from, to=f"whatsapp:{n}", body=body)
+            msg = client.messages.create(from_=wa_from, to=to_val, body=body)
             sent_any = True
+            results.append(f"{n}: QUEUED (SID {msg.sid}, status {msg.status})")
         except Exception as e:
-            errors.append(f"{n}: {e}")
+            results.append(f"{n}: FAILED ({e})")
 
-    if sent_any and not errors:
-        return True, "Sent successfully."
-    if sent_any and errors:
-        return True, "Sent to some numbers; failed for: " + " | ".join(errors)
-    return False, "Failed: " + (" | ".join(errors) if errors else "unknown")
-
-def should_send_now() -> bool:
-    n = now_local()
-    if n.weekday() != SEND_DAY_WEEKDAY:
-        return False
-    if n.time() < SEND_AFTER_TIME:
-        return False
-    end_time = (datetime.combine(n.date(), SEND_AFTER_TIME, tzinfo=TZ) + timedelta(hours=SEND_WINDOW_HOURS)).time()
-    return n.time() <= end_time
-
-def sent_state_path(db_path: Path) -> Path:
-    return db_path.with_name(".whatsapp_sent_state.json")
-
-def already_sent_today(db_path: Path) -> bool:
-    p = sent_state_path(db_path)
-    if not p.exists():
-        return False
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        return data.get("date") == now_local().strftime("%Y-%m-%d")
-    except Exception:
-        return False
-
-def mark_sent_today(db_path: Path):
-    p = sent_state_path(db_path)
-    data = {"date": now_local().strftime("%Y-%m-%d"), "ts": now_local().isoformat(timespec="seconds")}
-    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
-
+    if sent_any:
+        return True, " | ".join(results)
+    return False, " | ".join(results) if results else "No recipients."
 
 # ------------------ GRADES EXPORT ------------------
 def build_grades_export(df: pd.DataFrame, date_sel: str, grades: list[str], grade_capacity: int):
@@ -1011,3 +990,4 @@ with tabs[5]:
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
   
+
