@@ -994,7 +994,7 @@ with tabs[5]:
     st.markdown("</div>", unsafe_allow_html=True)
 
     # WhatsApp test
-   st.markdown('<div class="manage-card">', unsafe_allow_html=True)
+    st.markdown('<div class="manage-card">', unsafe_allow_html=True)
     st.markdown('<p class="manage-title">📩 WhatsApp Connection Test (Twilio)</p>', unsafe_allow_html=True)
     st.markdown('<div class="small-help">Send a test message to confirm Twilio is working.</div>', unsafe_allow_html=True)
 
@@ -1010,3 +1010,4 @@ with tabs[5]:
 
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
+  
