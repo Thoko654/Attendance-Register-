@@ -796,18 +796,18 @@ with tabs[4]:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-
 # ------------------ Manage Tab ------------------
 with tabs[5]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Manage Learners / Barcodes")
     st.caption("Use this section to import, edit, remove learners, and test WhatsApp sending.")
 
+    # Always read from DB
     df = get_learners_df(db_path).fillna("").astype(str)
     if "Date Of Birth" not in df.columns:
         df["Date Of Birth"] = ""
 
-    # IMPORT CSV
+    # ------------------ IMPORT CSV ------------------
     st.markdown('<div class="manage-card">', unsafe_allow_html=True)
     st.markdown('<p class="manage-title">📥 Bulk Import (CSV)</p>', unsafe_allow_html=True)
     st.markdown('<div class="small-help">Upload a CSV to replace all learners or merge updates by barcode.</div>', unsafe_allow_html=True)
@@ -893,71 +893,84 @@ with tabs[5]:
     if "Date Of Birth" not in df.columns:
         df["Date Of Birth"] = ""
 
-    # EDIT TABLE
+    # ------------------ EDIT (TOGGLE BUTTON) ------------------
     st.markdown('<div class="manage-card">', unsafe_allow_html=True)
     st.markdown('<p class="manage-title">✏️ Edit Learners</p>', unsafe_allow_html=True)
-    st.markdown('<div class="small-help">Edit the table, add rows at the bottom, then click <b>Save changes</b>.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="small-help">Click <b>Edit mode</b> to show the editable table. Turn it off to hide it.</div>', unsafe_allow_html=True)
 
-    editable_cols = ["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]
-    view_df = df.copy().reset_index(drop=True)
-    view_df.insert(0, "RowID", range(len(view_df)))
+    if "edit_mode" not in st.session_state:
+        st.session_state["edit_mode"] = False
 
-    edited = st.data_editor(
-        view_df[["RowID"] + editable_cols],
-        use_container_width=True,
-        num_rows="dynamic",
-        key="data_editor_manage",
-    )
+    b1, b2 = st.columns([1, 1])
+    with b1:
+        if st.button("✏️ Edit mode", use_container_width=True):
+            st.session_state["edit_mode"] = not st.session_state["edit_mode"]
+    with b2:
+        st.info("Edit mode: ✅ ON" if st.session_state["edit_mode"] else "Edit mode: ❌ OFF")
 
-    c1, c2 = st.columns([1, 1])
-    with c1:
-        if st.button("💾 Save changes", use_container_width=True):
-            edited_clean = edited.drop(columns=["RowID"]).fillna("").astype(str)
-            edited_clean = edited_clean[~(
-                (edited_clean["Name"].str.strip() == "") &
-                (edited_clean["Surname"].str.strip() == "") &
-                (edited_clean["Barcode"].str.strip() == "")
-            )].reset_index(drop=True)
+    if st.session_state["edit_mode"]:
+        editable_cols = ["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]
+        view_df = df.copy().reset_index(drop=True)
+        view_df.insert(0, "RowID", range(len(view_df)))
 
-            if (edited_clean["Barcode"].astype(str).str.strip() == "").any():
-                st.error("Every learner must have a Barcode. Please fill in missing barcodes.")
-            else:
-                bnorms = edited_clean["Barcode"].astype(str).apply(norm_barcode)
-                if bnorms.duplicated().any():
-                    st.error("Duplicate barcode detected (same barcode / leading zeros). Fix duplicates before saving.")
+        edited = st.data_editor(
+            view_df[["RowID"] + editable_cols],
+            use_container_width=True,
+            num_rows="dynamic",
+            key="data_editor_manage",
+        )
+
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            if st.button("💾 Save changes", use_container_width=True):
+                edited_clean = edited.drop(columns=["RowID"]).fillna("").astype(str)
+                edited_clean = edited_clean[~(
+                    (edited_clean["Name"].str.strip() == "") &
+                    (edited_clean["Surname"].str.strip() == "") &
+                    (edited_clean["Barcode"].str.strip() == "")
+                )].reset_index(drop=True)
+
+                if (edited_clean["Barcode"].astype(str).str.strip() == "").any():
+                    st.error("Every learner must have a Barcode. Please fill in missing barcodes.")
                 else:
-                    replace_learners_from_df(db_path, edited_clean)
-                    save_learners_backup(edited_clean)  # ✅ backup
-                    st.success("Saved ✅")
-                    st.rerun()
+                    bnorms = edited_clean["Barcode"].astype(str).apply(norm_barcode)
+                    if bnorms.duplicated().any():
+                        st.error("Duplicate barcode detected (same barcode / leading zeros). Fix duplicates before saving.")
+                    else:
+                        replace_learners_from_df(db_path, edited_clean)
+                        save_learners_backup(edited_clean)  # ✅ backup
+                        st.success("Saved ✅")
+                        st.session_state["edit_mode"] = False
+                        st.rerun()
 
-    with c2:
-        if st.button("🔄 Reload from DB", use_container_width=True):
-            st.rerun()
+        with c2:
+            if st.button("🔄 Cancel / Hide table", use_container_width=True):
+                st.session_state["edit_mode"] = False
+                st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # QUICK DELETE
+    # ------------------ QUICK DELETE ------------------
     st.markdown('<div class="manage-card">', unsafe_allow_html=True)
     st.markdown('<p class="manage-title">🗑 Remove Learner</p>', unsafe_allow_html=True)
     st.markdown('<div class="small-help">Enter a barcode and confirm before deleting.</div>', unsafe_allow_html=True)
 
     del_barcode = st.text_input("Enter barcode", key="del_barcode")
     confirm = st.checkbox("Confirm delete", key="confirm_del_barcode")
+
     if st.button("Delete ❌", use_container_width=True, disabled=not confirm):
         deleted = delete_learner_by_barcode(db_path, del_barcode.strip())
         if deleted == 0:
             st.error("Barcode not found.")
         else:
-            # after deletion, refresh backup
             df_after = get_learners_df(db_path).fillna("").astype(str)
-            save_learners_backup(df_after)
+            save_learners_backup(df_after)  # ✅ refresh backup
             st.success(f"Deleted {deleted} learner(s) ✅")
             st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # WhatsApp test
+    # ------------------ WhatsApp test (Twilio) ------------------
     st.markdown('<div class="manage-card">', unsafe_allow_html=True)
     st.markdown('<p class="manage-title">📩 WhatsApp Connection Test (Twilio)</p>', unsafe_allow_html=True)
     st.markdown('<div class="small-help">Send a test message to confirm Twilio is working.</div>', unsafe_allow_html=True)
@@ -965,7 +978,10 @@ with tabs[5]:
     if Client is None:
         st.warning("Twilio is not installed. Add `twilio` to requirements.txt.")
     else:
-        test_to = st.text_input("Test recipient number (E.164)", value=WHATSAPP_RECIPIENTS[0] if WHATSAPP_RECIPIENTS else "+27...")
+        test_to = st.text_input(
+            "Test recipient number (E.164)",
+            value=WHATSAPP_RECIPIENTS[0] if WHATSAPP_RECIPIENTS else "+27..."
+        )
         test_msg = st.text_area("Message", value="Hello! This is a test message from the Tutor Class Attendance app ✅")
 
         if st.button("Send Test WhatsApp", use_container_width=True):
@@ -974,7 +990,3 @@ with tabs[5]:
 
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
-  
-
-
-
