@@ -24,7 +24,9 @@ from db import (
     determine_next_action,
     get_currently_in,
     norm_barcode,
+    seed_learners_from_csv_if_empty,   # ✅ ADD THIS
 )
+
 
 # ------------------ CONFIG ------------------
 APP_TZ = os.environ.get("APP_TIMEZONE", "Africa/Johannesburg")
@@ -973,5 +975,6 @@ with tabs[5]:
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
   
+
 
 
