@@ -267,44 +267,79 @@ def build_birthday_message(birthdays: list[dict]) -> str:
     return "\n".join(lines)
 
 
-# ------------------ WHATSAPP (TWILIO) ------------------
+# ------------------ WHATSAPP (META CLOUD API) ------------------
+import os
+import requests
+
+def _normalize_e164(n: str) -> str:
+    """
+    Expect E.164 like +2767xxxxxxx
+    Removes 'whatsapp:' if user passed Twilio-style.
+    """
+    n = str(n).strip()
+    if n.startswith("whatsapp:"):
+        n = n.replace("whatsapp:", "").strip()
+    return n
+
 def send_whatsapp_message(to_numbers: list[str], body: str) -> tuple[bool, str]:
-    if Client is None:
-        return False, "Twilio not installed. Add 'twilio' to requirements.txt."
+    """
+    Sends WhatsApp messages using Meta WhatsApp Cloud API.
+    Works in TEST mode ONLY for numbers you've added as test recipients.
+    """
+    token = os.environ.get("META_WA_TOKEN", "").strip()
+    phone_number_id = os.environ.get("META_WA_PHONE_NUMBER_ID", "").strip()
 
-    sid = os.environ.get("TWILIO_ACCOUNT_SID", "").strip()
-    token = os.environ.get("TWILIO_AUTH_TOKEN", "").strip()
-    wa_from = os.environ.get("TWILIO_WHATSAPP_FROM", "").strip()
+    if not token or not phone_number_id:
+        return False, "Missing META_WA_TOKEN / META_WA_PHONE_NUMBER_ID."
 
-    if not sid or not token or not wa_from:
-        return False, "Missing TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM."
+    url = f"https://graph.facebook.com/v22.0/{phone_number_id}/messages"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
 
-    # Ensure from_ has whatsapp:
-    if not wa_from.startswith("whatsapp:"):
-        wa_from = "whatsapp:" + wa_from
-
-    client = Client(sid, token)
     sent_any = False
     results = []
 
     for n in to_numbers:
-        n = str(n).strip()
-        if not n:
+        to_e164 = _normalize_e164(n)
+        if not to_e164:
             continue
 
-        # Ensure to has whatsapp:
-        to_val = n if n.startswith("whatsapp:") else f"whatsapp:{n}"
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to_e164,
+            "type": "text",
+            "text": {"body": body},
+        }
 
         try:
-            msg = client.messages.create(from_=wa_from, to=to_val, body=body)
-            sent_any = True
-            results.append(f"{n}: QUEUED (SID {msg.sid}, status {msg.status})")
+            r = requests.post(url, headers=headers, json=payload, timeout=20)
+            data = r.json() if r.content else {}
+
+            if r.status_code in (200, 201):
+                sent_any = True
+                # Meta returns something like: {"messages":[{"id":"wamid..."}]}
+                msg_id = ""
+                if isinstance(data, dict):
+                    msgs = data.get("messages", [])
+                    if msgs and isinstance(msgs, list) and isinstance(msgs[0], dict):
+                        msg_id = msgs[0].get("id", "")
+                results.append(f"{to_e164}: SENT (id {msg_id})" if msg_id else f"{to_e164}: SENT")
+            else:
+                # Meta error format usually: {"error":{"message":"...","type":"...","code":...}}
+                err = data.get("error", {}) if isinstance(data, dict) else {}
+                emsg = err.get("message", str(data))
+                ecode = err.get("code", "")
+                results.append(f"{to_e164}: FAILED (HTTP {r.status_code} code {ecode} - {emsg})")
+
         except Exception as e:
-            results.append(f"{n}: FAILED ({e})")
+            results.append(f"{to_e164}: FAILED ({e})")
 
     if sent_any:
         return True, " | ".join(results)
     return False, " | ".join(results) if results else "No recipients."
+
 
 # ------------------ GRADES EXPORT ------------------
 def build_grades_export(df: pd.DataFrame, date_sel: str, grades: list[str], grade_capacity: int):
@@ -990,3 +1025,4 @@ with tabs[5]:
 
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
+
