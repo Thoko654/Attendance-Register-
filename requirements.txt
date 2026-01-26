@@ -2,5 +2,4 @@ streamlit
 pandas
 altair
 python-dateutil
-twilio
-
+requests
