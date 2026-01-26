@@ -532,7 +532,7 @@ with tabs[0]:
     present_today = (df_scan[today_label].astype(str).str.strip() == "1").sum() if total_learners else 0
     absent_today = total_learners - present_today
 
-    st.subheader("📊 Today at a glance")
+    st.subheader("📊 Today ")
     k1, k2, k3 = st.columns(3)
     with k1:
         st.markdown(f'<div class="stat-card"><b>Total learners</b><div class="kpi">{total_learners}</div></div>', unsafe_allow_html=True)
@@ -1034,5 +1034,6 @@ if st.button("Send Test WhatsApp", use_container_width=True):
         st.error(info)
 
 st.markdown("</div>", unsafe_allow_html=True)
+
 
 
