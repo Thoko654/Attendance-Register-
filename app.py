@@ -34,25 +34,32 @@ TZ = ZoneInfo(APP_TZ)
 
 DB_DEFAULT = "app.db"
 
+# Recipients (E.164 format)
 WHATSAPP_RECIPIENTS = [
     "+27836280453",
     "+27672291308",
 ]
 
+# Auto-send schedule (if you use it)
 SEND_DAY_WEEKDAY = 5          # Saturday
 SEND_AFTER_TIME = dtime(9, 0) # 09:00
 SEND_WINDOW_HOURS = 12
 
-# ✅ Grade capacity default changed to 15
+# Grade capacity default
 DEFAULT_GRADE_CAPACITY = 15
 
-# ✅ Backup file for permanent restore
+# Backup file for permanent restore
 BACKUP_LEARNERS_CSV = "learners_backup.csv"
 
-try:
-    from twilio.rest import Client
-except Exception:
-    Client = None
+# ------------------ META WHATSAPP CLOUD API ------------------
+# Put these in Streamlit secrets (recommended) or environment variables:
+# META_WA_TOKEN
+# META_WA_PHONE_NUMBER_ID
+# (optional) META_WA_API_VERSION (default v22.0)
+META_WA_TOKEN = os.environ.get("META_WA_TOKEN", "").strip()
+META_WA_PHONE_NUMBER_ID = os.environ.get("META_WA_PHONE_NUMBER_ID", "").strip()
+META_WA_API_VERSION = os.environ.get("META_WA_API_VERSION", "v22.0").strip()
+
 
 
 # ------------------ UTILITIES ------------------
@@ -1034,6 +1041,7 @@ if st.button("Send Test WhatsApp", use_container_width=True):
         st.error(info)
 
 st.markdown("</div>", unsafe_allow_html=True)
+
 
 
 
