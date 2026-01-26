@@ -27,6 +27,65 @@ from db import (
     seed_learners_from_csv_if_empty,   # ✅ ADD THIS
 )
 
+# ------------------ AUTO SEND (Meta WhatsApp) ------------------
+# Runs whenever someone opens/refreshes the app.
+# Sends once per day (stored in SQLite).
+
+import sqlite3
+
+def ensure_auto_send_table(db_path: Path):
+    con = sqlite3.connect(str(db_path))
+    cur = con.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS auto_send_log (
+            send_date TEXT PRIMARY KEY,
+            sent_at   TEXT
+        )
+    """)
+    con.commit()
+    con.close()
+
+def already_sent_today(db_path: Path, date_str: str) -> bool:
+    con = sqlite3.connect(str(db_path))
+    cur = con.cursor()
+    cur.execute("SELECT 1 FROM auto_send_log WHERE send_date = ?", (date_str,))
+    row = cur.fetchone()
+    con.close()
+    return bool(row)
+
+def mark_sent_today(db_path: Path, date_str: str, ts_iso: str):
+    con = sqlite3.connect(str(db_path))
+    cur = con.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO auto_send_log(send_date, sent_at) VALUES (?,?)",
+        (date_str, ts_iso)
+    )
+    con.commit()
+    con.close()
+
+ensure_auto_send_table(db_path)
+
+try:
+    now = now_local()
+    date_col, date_str, _, ts_iso = today_labels()
+
+    # If not sent today AND allowed to send now
+    if (not already_sent_today(db_path, date_str)) and should_auto_send(now):
+        df_now = load_wide_sheet(db_path)
+        birthdays = get_birthdays_for_week(df_now)
+        msg = build_birthday_message(birthdays)
+
+        ok, info = send_whatsapp_message(WHATSAPP_RECIPIENTS, msg)
+        if ok:
+            mark_sent_today(db_path, date_str, ts_iso)
+            st.sidebar.success("✅ Auto WhatsApp sent today")
+        else:
+            st.sidebar.warning(f"⚠️ Auto WhatsApp failed: {info}")
+
+except Exception as e:
+    st.sidebar.warning(f"⚠️ Auto send error: {e}")
+
+
 
 # ------------------ CONFIG ------------------
 APP_TZ = os.environ.get("APP_TIMEZONE", "Africa/Johannesburg")
@@ -1041,6 +1100,7 @@ if st.button("Send Test WhatsApp", use_container_width=True):
         st.error(info)
 
 st.markdown("</div>", unsafe_allow_html=True)
+
 
 
 
