@@ -460,8 +460,11 @@ with st.sidebar:
 
     init_db(db_path)
 
-    # ✅ Restore learners if DB got wiped
-    restore_learners_if_db_empty(db_path)
+    # ✅ Restore learners if DB is empty (seeds from attendance_clean.csv)
+    try:
+        seed_learners_from_csv_if_empty(db_path, "attendance_clean.csv")
+    except Exception as e:
+        st.warning(f"Auto-restore failed: {e}")
 
     st.markdown("### Grade capacity (benchmark)")
     grade_capacity = st.number_input(
@@ -475,26 +478,6 @@ with st.sidebar:
 
 st.divider()
 tabs = st.tabs(["📷 Scan", "📅 Today", "🏫 Grades", "📚 History", "📈 Tracking", "🛠 Manage"])
-
-
-# ------------------ AUTO-SEND (safe) ------------------
-try:
-    today_label, _, _, _ = today_labels()
-    add_class_date(db_path, today_label)
-
-    df_auto = load_wide_sheet(db_path)
-    birthdays = get_birthdays_for_week(df_auto)
-
-    if birthdays and should_send_now() and not already_sent_today(db_path):
-        msg = build_birthday_message(birthdays)
-        ok, info = send_whatsapp_message(WHATSAPP_RECIPIENTS, msg)
-        if ok:
-            mark_sent_today(db_path)
-            st.toast("WhatsApp birthday summary sent ✅", icon="✅")
-        else:
-            st.sidebar.warning(f"Auto WhatsApp not sent: {info}")
-except Exception:
-    pass
 
 
 # ------------------ Scan Tab ------------------
@@ -990,4 +973,5 @@ with tabs[5]:
     st.markdown("</div>", unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
   
+
 
