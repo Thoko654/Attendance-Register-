@@ -4,23 +4,6 @@ import sqlite3
 from pathlib import Path
 import pandas as pd
 
-def ensure_auto_send_table(db_path: Path):
-    """
-    Creates a small table to prevent WhatsApp auto-send from sending repeatedly.
-    Safe to call every app start.
-    """
-    db_path = Path(db_path)
-    conn = sqlite3.connect(db_path)
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS auto_send_log (
-            key TEXT PRIMARY KEY,
-            sent_at TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
-
 
 # ------------------ HELPERS ------------------
 def norm_barcode(code: str) -> str:
@@ -376,4 +359,5 @@ def get_currently_in(db_path: Path, date_str: str) -> pd.DataFrame:
     """, conn, params=(date_str,))
     conn.close()
     return df.fillna("").astype(str)
+
 
