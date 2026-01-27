@@ -63,7 +63,7 @@ def mark_sent_today(db_path: Path, date_str: str, ts_iso: str):
     con.commit()
     con.close()
 
-ensure_auto_send_table(db_path)
+#ensure_auto_send_table(db_path)
 
 try:
     now = now_local()
@@ -1100,6 +1100,7 @@ if st.button("Send Test WhatsApp", use_container_width=True):
         st.error(info)
 
 st.markdown("</div>", unsafe_allow_html=True)
+
 
 
 
