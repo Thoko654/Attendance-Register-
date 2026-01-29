@@ -63,27 +63,34 @@ def mark_sent_today(db_path: Path, date_str: str, ts_iso: str):
     con.commit()
     con.close()
 
-#ensure_auto_send_table(db_path)
+# ✅ MUST run this or the table may not exist
+ensure_auto_send_table(db_path)
 
 try:
     now = now_local()
-    date_col, date_str, _, ts_iso = today_labels()
+    _, date_str, _, ts_iso = today_labels()
 
-    # If not sent today AND allowed to send now
+    # Send only once per day + only after scheduled time
     if (not already_sent_today(db_path, date_str)) and should_auto_send(now):
         df_now = load_wide_sheet(db_path)
         birthdays = get_birthdays_for_week(df_now)
-        msg = build_birthday_message(birthdays)
 
-        ok, info = send_whatsapp_message(WHATSAPP_RECIPIENTS, msg)
-        if ok:
-            mark_sent_today(db_path, date_str, ts_iso)
-            st.sidebar.success("✅ Auto WhatsApp sent today")
+        # ✅ optional: only send if there are birthdays
+        if birthdays:
+            msg = build_birthday_message(birthdays)
+            ok, info = send_whatsapp_message(WHATSAPP_RECIPIENTS, msg)
+
+            if ok:
+                mark_sent_today(db_path, date_str, ts_iso)
+                st.sidebar.success("✅ Auto WhatsApp sent today")
+            else:
+                st.sidebar.warning(f"⚠️ Auto WhatsApp failed: {info}")
         else:
-            st.sidebar.warning(f"⚠️ Auto WhatsApp failed: {info}")
+            st.sidebar.info("No birthdays to send today.")
 
 except Exception as e:
     st.sidebar.warning(f"⚠️ Auto send error: {e}")
+
 
 
 
@@ -1100,6 +1107,7 @@ if st.button("Send Test WhatsApp", use_container_width=True):
         st.error(info)
 
 st.markdown("</div>", unsafe_allow_html=True)
+
 
 
 
