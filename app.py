@@ -27,6 +27,38 @@ from db import (
     seed_learners_from_csv_if_empty,   # ✅ ADD THIS
 )
 
+# ✅ Auto-send setup (runs after db_path exists)
+ensure_auto_send_table(db_path)
+
+def should_auto_send(now: datetime) -> bool:
+    # Saturday only
+    if now.weekday() != SEND_DAY_WEEKDAY:
+        return False
+    # After 09:00 only
+    return now.time() >= SEND_AFTER_TIME
+
+# ✅ Auto-send birthdays
+try:
+    now = now_local()
+    date_col, date_str, _, ts_iso = today_labels()
+
+    if (not already_sent_today(db_path, date_str)) and should_auto_send(now):
+        df_now = load_wide_sheet(db_path)
+        birthdays = get_birthdays_for_week(df_now)
+        msg = build_birthday_message(birthdays)
+
+        ok, info = send_whatsapp_message(WHATSAPP_RECIPIENTS, msg)
+
+        if ok:
+            mark_sent_today(db_path, date_str, ts_iso)
+            st.sidebar.success("✅ Auto WhatsApp sent today")
+        else:
+            st.sidebar.warning(f"⚠️ Auto WhatsApp failed: {info}")
+
+except Exception as e:
+    st.sidebar.warning(f"⚠️ Auto send error: {e}")
+
+
 # ------------------ AUTO SEND (Meta WhatsApp) ------------------
 # Runs whenever someone opens/refreshes the app.
 # Sends once per day (stored in SQLite).
@@ -64,7 +96,7 @@ def mark_sent_today(db_path: Path, date_str: str, ts_iso: str):
     con.close()
 
 # ✅ MUST run this or the table may not exist
-ensure_auto_send_table(db_path)
+#ensure_auto_send_table(db_path)
 
 try:
     now = now_local()
@@ -1107,6 +1139,7 @@ if st.button("Send Test WhatsApp", use_container_width=True):
         st.error(info)
 
 st.markdown("</div>", unsafe_allow_html=True)
+
 
 
 
