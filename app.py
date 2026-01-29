@@ -28,7 +28,7 @@ from db import (
 )
 
 # ✅ Auto-send setup (runs after db_path exists)
-ensure_auto_send_table(db_path)
+#ensure_auto_send_table(db_path)
 
 def should_auto_send(now: datetime) -> bool:
     # Saturday only
@@ -601,6 +601,7 @@ with st.sidebar:
     db_path = Path(db_path_str).expanduser()
 
     init_db(db_path)
+    ensure_auto_send_table(db_path)
 
     # ✅ Restore learners if DB is empty (seeds from attendance_clean.csv)
     try:
@@ -1139,6 +1140,7 @@ if st.button("Send Test WhatsApp", use_container_width=True):
         st.error(info)
 
 st.markdown("</div>", unsafe_allow_html=True)
+
 
 
 
