@@ -4,6 +4,19 @@ import sqlite3
 from pathlib import Path
 import pandas as pd
 
+def ensure_auto_send_table(db_path: Path):
+    con = sqlite3.connect(str(db_path))
+    cur = con.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS auto_send_log (
+            send_date TEXT PRIMARY KEY,
+            sent_at   TEXT
+        )
+    """)
+    con.commit()
+    con.close()
+
+
 
 # ------------------ HELPERS ------------------
 def norm_barcode(code: str) -> str:
@@ -359,5 +372,6 @@ def get_currently_in(db_path: Path, date_str: str) -> pd.DataFrame:
     """, conn, params=(date_str,))
     conn.close()
     return df.fillna("").astype(str)
+
 
 
