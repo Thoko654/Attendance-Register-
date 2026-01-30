@@ -12,6 +12,18 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> List[str]:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return [r[1] for r in rows]  # col name is index 1
 
+def ensure_auto_send_table(db_path: Path):
+    con = sqlite3.connect(str(db_path), check_same_thread=False)
+    cur = con.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS auto_send_log (
+            send_date TEXT PRIMARY KEY,
+            sent_at   TEXT
+        )
+    """)
+    con.commit()
+    con.close()
+
 
 def ensure_auto_send_table(db_path: Path):
     """
@@ -510,3 +522,4 @@ def get_currently_in(db_path: Path, date_str: str) -> pd.DataFrame:
     """, conn, params=(date_str,))
     conn.close()
     return df.fillna("").astype(str)
+
