@@ -33,7 +33,8 @@ from db import (
 APP_TZ = os.environ.get("APP_TIMEZONE", "Africa/Johannesburg")
 TZ = ZoneInfo(APP_TZ)
 
-DB_DEFAULT = "app.db"
+DB_DEFAULT = "app_v2.db"
+
 DB_PATH = Path(os.environ.get("DB_PATH", DB_DEFAULT))
 
 WHATSAPP_RECIPIENTS = ["+27836280453", "+27672291308"]
@@ -438,3 +439,4 @@ with tabs[5]:
         mime="text/csv",
         use_container_width=True
     )
+
