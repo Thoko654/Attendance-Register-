@@ -28,7 +28,6 @@ from db import (
 )
 
 # ✅ Auto-send setup (runs after db_path exists)
-#ensure_auto_send_table(db_path)
 
 def should_auto_send(now: datetime) -> bool:
     # Saturday only
@@ -65,9 +64,6 @@ except Exception as e:
 import sqlite3
 from datetime import time as dtime
 from db import ensure_auto_send_table
-
-ensure_auto_send_table(db_path)
-
 
 def ensure_auto_send_table(db_path: Path):
     con = sqlite3.connect(str(db_path))
@@ -1149,6 +1145,7 @@ if st.button("Send Test WhatsApp", use_container_width=True):
         st.error(info)
 
 st.markdown("</div>", unsafe_allow_html=True)
+
 
 
 
