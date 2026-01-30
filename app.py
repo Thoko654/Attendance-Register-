@@ -14,7 +14,9 @@ import altair as alt
 
 from db import (
     init_db,
-    ensure_auto_send_table,   # ✅ add this
+    ensure_auto_send_table,# ✅ add this
+    already_sent_today,
+    mark_sent_today,
     get_wide_sheet,
     get_learners_df,
     replace_learners_from_df,
@@ -26,6 +28,7 @@ from db import (
     get_currently_in,
     norm_barcode,
     seed_learners_from_csv_if_empty,
+
 )
 
 # ✅ Auto-send setup (runs after db_path exists)
@@ -118,6 +121,39 @@ def run_auto_send(db_path: Path):
         st.sidebar.success("✅ Auto WhatsApp sent today")
     else:
         st.sidebar.warning(f"⚠️ Auto WhatsApp failed: {info}")
+def should_auto_send(now: datetime) -> bool:
+    return (now.weekday() == SEND_DAY_WEEKDAY) and (now.time() >= SEND_AFTER_TIME)
+
+def run_auto_send(db_path: Path):
+    ensure_auto_send_table(db_path)
+
+    now = now_local()
+    _, date_str, _, ts_iso = today_labels()
+
+    # Saturday only + after 09:00
+    if not should_auto_send(now):
+        return
+
+    # already sent today
+    if already_sent_today(db_path, date_str):
+        return
+
+    df_now = load_wide_sheet(db_path)
+    birthdays = get_birthdays_for_week(df_now)
+
+    # Option A: send only if birthdays exist
+    if not birthdays:
+        mark_sent_today(db_path, date_str, ts_iso)  # stop repeats
+        return
+
+    msg = build_birthday_message(birthdays)
+
+    ok, info = send_whatsapp_message(WHATSAPP_RECIPIENTS, msg)
+    if ok:
+        mark_sent_today(db_path, date_str, ts_iso)
+    else:
+        raise Exception(info)
+
 
 
 
@@ -596,6 +632,16 @@ with st.sidebar:
 
     init_db(db_path)
     ensure_auto_send_table(db_path)
+    
+    # --- Trigger auto-send from URL ping ---
+ping = st.query_params.get("ping", None)
+if ping == "1":
+    try:
+        run_auto_send(db_path)
+        st.success("✅ Auto-send checked (ping)")
+    except Exception as e:
+        st.error(f"❌ Auto-send error: {e}")
+
 
     # ✅ Auto-send runs here (db_path exists now)
 try:
@@ -1140,6 +1186,7 @@ if st.button("Send Test WhatsApp", use_container_width=True):
         st.error(info)
 
 st.markdown("</div>", unsafe_allow_html=True)
+
 
 
 
