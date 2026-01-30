@@ -667,3 +667,4 @@ with tabs[5]:
                     st.rerun()
         except Exception as e:
             st.error(f"Upload error: {e}")
+
