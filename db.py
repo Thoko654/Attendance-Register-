@@ -1,33 +1,41 @@
 # db.py — Tutor Class Attendance Register 2026 (SQLite)
-# Provides ALL functions used by app.py
+# Includes: init + auto-migration, learners, attendance, in/out log, wide sheet, auto-send log
 
-from __future__ import annotations
-
-import os
 import sqlite3
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
 
 
-# ------------------ DB CONNECTION ------------------
+# ------------------ CONNECTION ------------------
 
 def _connect(db_path: Path):
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL;")
-    conn.execute("PRAGMA foreign_keys=ON;")
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
 
-# ------------------ INIT / TABLES ------------------
+# ------------------ NORMALIZE ------------------
+
+def norm_barcode(x: str) -> str:
+    return str(x or "").strip()
+
+
+# ------------------ INIT + MIGRATION ------------------
 
 def init_db(db_path: Path):
-    """Create all required tables if missing."""
+    """
+    Creates required tables and auto-migrates older schemas:
+    - attendance.label -> attendance.date_label
+    - attendance.date  -> attendance.date_iso
+    - auto_send_log.label -> auto_send_log.date_iso
+    """
     conn = _connect(db_path)
     cur = conn.cursor()
 
+    # learners
     cur.execute("""
     CREATE TABLE IF NOT EXISTS learners (
         barcode TEXT PRIMARY KEY,
@@ -39,12 +47,13 @@ def init_db(db_path: Path):
     )
     """)
 
+    # attendance
     cur.execute("""
     CREATE TABLE IF NOT EXISTS attendance (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         barcode TEXT NOT NULL,
-        date_label TEXT NOT NULL,        -- e.g. "30-Jan"
-        date_iso TEXT NOT NULL,          -- e.g. "2026-01-30"
+        date_label TEXT NOT NULL,
+        date_iso TEXT NOT NULL,
         present INTEGER NOT NULL DEFAULT 0,
         ts_iso TEXT,
         UNIQUE(barcode, date_label),
@@ -52,17 +61,19 @@ def init_db(db_path: Path):
     )
     """)
 
+    # in/out
     cur.execute("""
     CREATE TABLE IF NOT EXISTS inout_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         barcode TEXT NOT NULL,
-        action TEXT NOT NULL,            -- "IN" or "OUT"
-        ts_iso TEXT NOT NULL,            -- iso timestamp
-        date_iso TEXT NOT NULL,          -- YYYY-MM-DD
-        time_str TEXT NOT NULL           -- HH:MM:SS
+        action TEXT NOT NULL,            -- 'IN' or 'OUT'
+        ts_iso TEXT NOT NULL,
+        date_iso TEXT NOT NULL,
+        time_str TEXT NOT NULL
     )
     """)
 
+    # auto send log
     cur.execute("""
     CREATE TABLE IF NOT EXISTS auto_send_log (
         date_iso TEXT PRIMARY KEY,
@@ -71,30 +82,78 @@ def init_db(db_path: Path):
     """)
 
     conn.commit()
+
+    # ---------- MIGRATIONS ----------
+    def _cols(table: str):
+        return [r[1] for r in cur.execute(f"PRAGMA table_info({table})").fetchall()]
+
+    # attendance.label -> date_label
+    cols_att = _cols("attendance")
+    if "label" in cols_att and "date_label" not in cols_att:
+        try:
+            cur.execute("ALTER TABLE attendance RENAME COLUMN label TO date_label")
+            conn.commit()
+        except Exception:
+            pass
+
+    # attendance.date -> date_iso
+    cols_att = _cols("attendance")
+    if "date" in cols_att and "date_iso" not in cols_att:
+        try:
+            cur.execute("ALTER TABLE attendance RENAME COLUMN date TO date_iso")
+            conn.commit()
+        except Exception:
+            pass
+
+    # auto_send_log.label -> date_iso
+    cols_send = _cols("auto_send_log")
+    if "label" in cols_send and "date_iso" not in cols_send:
+        try:
+            cur.execute("ALTER TABLE auto_send_log RENAME COLUMN label TO date_iso")
+            conn.commit()
+        except Exception:
+            pass
+
     conn.close()
 
 
 def ensure_auto_send_table(db_path: Path):
-    """Kept for compatibility (init_db already creates it)."""
-    init_db(db_path)
+    # kept for compatibility (init_db already creates it)
+    conn = _connect(db_path)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS auto_send_log (
+        date_iso TEXT PRIMARY KEY,
+        ts_iso TEXT NOT NULL
+    )
+    """)
+    conn.commit()
+    conn.close()
 
 
-# ------------------ HELPERS ------------------
+# ------------------ AUTO SEND LOG ------------------
 
-def norm_barcode(x: str) -> str:
-    x = "" if x is None else str(x)
-    x = x.strip().replace(" ", "")
-    return x.upper()
+def already_sent_today(db_path: Path, date_iso: str) -> bool:
+    conn = _connect(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM auto_send_log WHERE date_iso = ? LIMIT 1", (date_iso,))
+    row = cur.fetchone()
+    conn.close()
+    return row is not None
 
 
-def _safe_str(x) -> str:
-    return "" if x is None else str(x).strip()
+def mark_sent_today(db_path: Path, date_iso: str, ts_iso: str):
+    conn = _connect(db_path)
+    conn.execute(
+        "INSERT OR REPLACE INTO auto_send_log(date_iso, ts_iso) VALUES (?, ?)",
+        (date_iso, ts_iso),
+    )
+    conn.commit()
+    conn.close()
 
 
-# ------------------ LEARNERS CRUD ------------------
+# ------------------ LEARNERS ------------------
 
 def get_learners_df(db_path: Path) -> pd.DataFrame:
-    init_db(db_path)
     conn = _connect(db_path)
     df = pd.read_sql_query("""
         SELECT
@@ -105,97 +164,189 @@ def get_learners_df(db_path: Path) -> pd.DataFrame:
             area AS "Area",
             dob AS "Date Of Birth"
         FROM learners
-        ORDER BY Grade, Name, Surname
+        ORDER BY grade, name, surname
     """, conn)
     conn.close()
-    return df.fillna("")
+    return df.fillna("").astype(str)
 
 
 def replace_learners_from_df(db_path: Path, df: pd.DataFrame):
-    init_db(db_path)
+    df = df.copy().fillna("").astype(str)
+    # Normalize columns
+    df.columns = [c.strip() for c in df.columns]
+    need = ["Name", "Surname", "Barcode"]
+    for c in need:
+        if c not in df.columns:
+            raise ValueError(f"Missing column: {c}")
+
+    for c in ["Grade", "Area", "Date Of Birth"]:
+        if c not in df.columns:
+            df[c] = ""
+
+    df["Barcode"] = df["Barcode"].map(norm_barcode)
+    df = df[df["Barcode"] != ""].drop_duplicates(subset=["Barcode"]).reset_index(drop=True)
+
     conn = _connect(db_path)
     cur = conn.cursor()
-
     cur.execute("DELETE FROM learners")
     conn.commit()
 
-    rows = []
-    for _, r in df.iterrows():
-        bc = norm_barcode(r.get("Barcode", ""))
-        if not bc:
-            continue
-        rows.append((
-            bc,
-            _safe_str(r.get("Name", "")),
-            _safe_str(r.get("Surname", "")),
-            _safe_str(r.get("Grade", "")),
-            _safe_str(r.get("Area", "")),
-            _safe_str(r.get("Date Of Birth", "")),
-        ))
-
     cur.executemany("""
-        INSERT OR REPLACE INTO learners(barcode, name, surname, grade, area, dob)
+        INSERT INTO learners(barcode, name, surname, grade, area, dob)
         VALUES (?, ?, ?, ?, ?, ?)
-    """, rows)
-
+    """, [
+        (r["Barcode"], r["Name"], r["Surname"], r["Grade"], r["Area"], r["Date Of Birth"])
+        for _, r in df.iterrows()
+    ])
     conn.commit()
     conn.close()
 
 
-def delete_learner_by_barcode(db_path: Path, barcode: str):
-    init_db(db_path)
-    bc = norm_barcode(barcode)
-    if not bc:
-        return
+def delete_learner_by_barcode(db_path: Path, barcode: str) -> bool:
+    barcode = norm_barcode(barcode)
+    if not barcode:
+        return False
     conn = _connect(db_path)
-    conn.execute("DELETE FROM learners WHERE barcode = ?", (bc,))
+    cur = conn.cursor()
+    cur.execute("DELETE FROM learners WHERE barcode = ?", (barcode,))
+    ok = cur.rowcount > 0
     conn.commit()
     conn.close()
+    return ok
+
+
+def seed_learners_from_csv_if_empty(db_path: Path, seed_csv: str = "learners_seed.csv"):
+    conn = _connect(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM learners")
+    n = cur.fetchone()[0]
+    conn.close()
+
+    if n > 0:
+        return
+
+    p = Path(seed_csv)
+    if not p.exists():
+        return
+
+    df = pd.read_csv(p).fillna("").astype(str)
+    replace_learners_from_df(db_path, df)
 
 
 # ------------------ ATTENDANCE ------------------
 
+def _attendance_colnames(conn) -> dict:
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(attendance)").fetchall()]
+    date_label_col = "date_label" if "date_label" in cols else ("label" if "label" in cols else "date_label")
+    date_iso_col = "date_iso" if "date_iso" in cols else ("date" if "date" in cols else "date_iso")
+    return {"date_label": date_label_col, "date_iso": date_iso_col}
+
+
 def add_class_date(db_path: Path, date_label: str, date_iso: str):
-    """Ensure every learner has a row for this date (present defaults to 0)."""
-    init_db(db_path)
+    # Not required for pivot-based view; kept for compatibility.
+    # (If you want, you could pre-create rows here, but we do it on scan.)
+    return
+
+
+def insert_present_mark(db_path: Path, barcode: str, date_label: str, date_iso: str, ts_iso: str):
+    barcode = norm_barcode(barcode)
+    if not barcode:
+        return
+
     conn = _connect(db_path)
-    cur = conn.cursor()
+    cols = _attendance_colnames(conn)
+    dl = cols["date_label"]
+    di = cols["date_iso"]
 
-    learners = pd.read_sql_query("SELECT barcode FROM learners", conn)["barcode"].tolist()
-    rows = [(bc, date_label, date_iso) for bc in learners]
-
-    cur.executemany("""
-        INSERT OR IGNORE INTO attendance(barcode, date_label, date_iso, present)
-        VALUES (?, ?, ?, 0)
-    """, rows)
-
+    conn.execute(f"""
+        INSERT INTO attendance(barcode, {dl}, {di}, present, ts_iso)
+        VALUES (?, ?, ?, 1, ?)
+        ON CONFLICT(barcode, {dl}) DO UPDATE SET
+            present = 1,
+            ts_iso = excluded.ts_iso,
+            {di} = excluded.{di}
+    """, (barcode, date_label, date_iso, ts_iso))
     conn.commit()
     conn.close()
 
 
-def insert_present_mark(db_path: Path, barcode: str, date_label: str, date_iso: str, ts_iso: str):
-    """Mark learner present=1 for that date (UPSERT)."""
-    init_db(db_path)
-    bc = norm_barcode(barcode)
-    if not bc:
+# ------------------ IN/OUT LOG ------------------
+
+def append_inout_log(db_path: Path, barcode: str, action: str, ts_iso: str, date_iso: str, time_str: str):
+    barcode = norm_barcode(barcode)
+    action = str(action).strip().upper()
+    if action not in ("IN", "OUT"):
         return
 
     conn = _connect(db_path)
     conn.execute("""
-        INSERT INTO attendance(barcode, date_label, date_iso, present, ts_iso)
-        VALUES (?, ?, ?, 1, ?)
-        ON CONFLICT(barcode, date_label)
-        DO UPDATE SET present=1, date_iso=excluded.date_iso, ts_iso=excluded.ts_iso
-    """, (bc, date_label, date_iso, ts_iso))
-
+        INSERT INTO inout_log(barcode, action, ts_iso, date_iso, time_str)
+        VALUES (?, ?, ?, ?, ?)
+    """, (barcode, action, ts_iso, date_iso, time_str))
     conn.commit()
     conn.close()
 
 
-def get_wide_sheet(db_path: Path) -> pd.DataFrame:
-    """Return learners + attendance pivoted into date columns (like your old CSV layout)."""
-    init_db(db_path)
+def get_currently_in(db_path: Path, date_iso: str) -> pd.DataFrame:
+    """
+    Return learners whose LAST action today is IN (and not OUT after).
+    """
     conn = _connect(db_path)
+
+    df = pd.read_sql_query("""
+        SELECT l.name AS Name, l.surname AS Surname, l.grade AS Grade, l.area AS Area,
+               x.barcode AS Barcode, x.action AS Action, x.time_str AS Time
+        FROM inout_log x
+        JOIN (
+            SELECT barcode, MAX(id) AS max_id
+            FROM inout_log
+            WHERE date_iso = ?
+            GROUP BY barcode
+        ) last ON last.barcode = x.barcode AND last.max_id = x.id
+        LEFT JOIN learners l ON l.barcode = x.barcode
+        WHERE x.date_iso = ?
+        ORDER BY l.grade, l.name, l.surname
+    """, conn, params=(date_iso, date_iso)).fillna("").astype(str)
+
+    conn.close()
+
+    if df.empty:
+        return df
+
+    return df[df["Action"] == "IN"].reset_index(drop=True)
+
+
+def determine_next_action(db_path: Path, barcode: str, date_iso: str) -> str:
+    barcode = norm_barcode(barcode)
+    if not barcode:
+        return "IN"
+
+    conn = _connect(db_path)
+    df = pd.read_sql_query("""
+        SELECT action
+        FROM inout_log
+        WHERE barcode = ? AND date_iso = ?
+        ORDER BY id DESC
+        LIMIT 1
+    """, conn, params=(barcode, date_iso))
+    conn.close()
+
+    if df.empty:
+        return "IN"
+    last = str(df.iloc[0]["action"]).upper()
+    return "OUT" if last == "IN" else "IN"
+
+
+# ------------------ WIDE SHEET (learners + date columns) ------------------
+
+def get_wide_sheet(db_path: Path) -> pd.DataFrame:
+    """
+    Returns wide dataframe:
+    Name, Surname, Barcode, Grade, Area, Date Of Birth, [date_label columns...]
+    """
+    conn = _connect(db_path)
+    cols = _attendance_colnames(conn)
+    dl = cols["date_label"]
 
     learners = pd.read_sql_query("""
         SELECT
@@ -206,144 +357,27 @@ def get_wide_sheet(db_path: Path) -> pd.DataFrame:
             area AS "Area",
             dob AS "Date Of Birth"
         FROM learners
-    """, conn).fillna("")
+        ORDER BY grade, name, surname
+    """, conn).fillna("").astype(str)
 
-    att = pd.read_sql_query("""
-        SELECT barcode, date_label, present
+    if learners.empty:
+        conn.close()
+        return learners
+
+    att = pd.read_sql_query(f"""
+        SELECT barcode, {dl} AS date_label, present
         FROM attendance
     """, conn).fillna("")
 
     conn.close()
 
-    if learners.empty:
-        return learners
-
     if att.empty:
         return learners
 
-    att["barcode"] = att["barcode"].astype(str).map(norm_barcode)
-    pivot = att.pivot_table(index="barcode", columns="date_label", values="present", aggfunc="max", fill_value=0)
-    pivot = pivot.reset_index().rename(columns={"barcode": "Barcode"})
+    # Ensure only 0/1
+    att["present"] = att["present"].apply(lambda x: "1" if str(x).strip() in ("1", "True", "true") else "")
 
-    merged = learners.copy()
-    merged["Barcode"] = merged["Barcode"].astype(str).map(norm_barcode)
-    out = merged.merge(pivot, on="Barcode", how="left").fillna("")
+    wide = att.pivot_table(index="barcode", columns="date_label", values="present", aggfunc="max").reset_index()
+    out = learners.merge(wide, how="left", left_on="Barcode", right_on="barcode").drop(columns=["barcode"])
+    out = out.fillna("")
     return out
-
-
-# ------------------ IN/OUT LOG ------------------
-
-def append_inout_log(db_path: Path, barcode: str, action: str, ts_iso: str, date_iso: str, time_str: str):
-    init_db(db_path)
-    bc = norm_barcode(barcode)
-    if not bc:
-        return
-    action = "IN" if str(action).upper().strip() == "IN" else "OUT"
-
-    conn = _connect(db_path)
-    conn.execute("""
-        INSERT INTO inout_log(barcode, action, ts_iso, date_iso, time_str)
-        VALUES (?, ?, ?, ?, ?)
-    """, (bc, action, ts_iso, date_iso, time_str))
-    conn.commit()
-    conn.close()
-
-
-def get_currently_in(db_path: Path) -> pd.DataFrame:
-    """Learners whose latest log action is IN."""
-    init_db(db_path)
-    conn = _connect(db_path)
-
-    logs = pd.read_sql_query("""
-        SELECT barcode, action, ts_iso
-        FROM inout_log
-    """, conn)
-
-    learners = pd.read_sql_query("""
-        SELECT
-            barcode AS "Barcode",
-            name AS "Name",
-            surname AS "Surname",
-            grade AS "Grade",
-            area AS "Area"
-        FROM learners
-    """, conn).fillna("")
-
-    conn.close()
-
-    if logs.empty:
-        return learners.iloc[0:0].copy()
-
-    logs["barcode"] = logs["barcode"].astype(str).map(norm_barcode)
-    logs = logs.sort_values("ts_iso").groupby("barcode").tail(1)
-
-    currently_in_barcodes = logs.loc[logs["action"] == "IN", "barcode"].tolist()
-    if not currently_in_barcodes:
-        return learners.iloc[0:0].copy()
-
-    learners["Barcode"] = learners["Barcode"].astype(str).map(norm_barcode)
-    out = learners[learners["Barcode"].isin(currently_in_barcodes)].copy()
-    return out.sort_values(["Grade", "Name", "Surname"]).reset_index(drop=True)
-
-
-def determine_next_action(db_path: Path, barcode: str) -> str:
-    """If currently IN -> next is OUT, else next is IN."""
-    bc = norm_barcode(barcode)
-    if not bc:
-        return "IN"
-    df_in = get_currently_in(db_path)
-    if not df_in.empty and bc in df_in["Barcode"].astype(str).tolist():
-        return "OUT"
-    return "IN"
-
-
-# ------------------ AUTO SEND LOG ------------------
-
-def already_sent_today(db_path: Path, date_iso: str) -> bool:
-    init_db(db_path)
-    conn = _connect(db_path)
-    row = conn.execute("SELECT date_iso FROM auto_send_log WHERE date_iso = ?", (date_iso,)).fetchone()
-    conn.close()
-    return row is not None
-
-
-def mark_sent_today(db_path: Path, date_iso: str, ts_iso: str):
-    init_db(db_path)
-    conn = _connect(db_path)
-    conn.execute("""
-        INSERT OR REPLACE INTO auto_send_log(date_iso, ts_iso)
-        VALUES (?, ?)
-    """, (date_iso, ts_iso))
-    conn.commit()
-    conn.close()
-
-
-# ------------------ OPTIONAL SEED ------------------
-
-def seed_learners_from_csv_if_empty(db_path: Path, seed_file: str = "learners_seed.csv"):
-    """
-    Optional: if learners table is empty and seed CSV exists, load it.
-    CSV must have columns: Name, Surname, Barcode, Grade, Area, Date Of Birth
-    """
-    init_db(db_path)
-    conn = _connect(db_path)
-    n = conn.execute("SELECT COUNT(*) FROM learners").fetchone()[0]
-    conn.close()
-    if n > 0:
-        return
-
-    p = Path(seed_file)
-    if not p.exists():
-        return
-
-    df = pd.read_csv(p).fillna("").astype(str)
-    needed = {"Name", "Surname", "Barcode"}
-    if not needed.issubset(set(df.columns)):
-        return
-
-    for c in ["Grade", "Area", "Date Of Birth"]:
-        if c not in df.columns:
-            df[c] = ""
-
-    df = df[["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]].copy()
-    replace_learners_from_df(db_path, df)
