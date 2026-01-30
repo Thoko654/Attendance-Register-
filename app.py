@@ -14,6 +14,7 @@ import altair as alt
 
 from db import (
     init_db,
+    ensure_auto_send_table,   # ✅ add this
     get_wide_sheet,
     get_learners_df,
     replace_learners_from_df,
@@ -24,7 +25,7 @@ from db import (
     determine_next_action,
     get_currently_in,
     norm_barcode,
-    seed_learners_from_csv_if_empty,   # ✅ ADD THIS
+    seed_learners_from_csv_if_empty,
 )
 
 # ✅ Auto-send setup (runs after db_path exists)
@@ -59,23 +60,11 @@ except Exception as e:
 
 
 # ------------------ AUTO SEND (Meta WhatsApp) ------------------
-# Runs whenever someone opens/refreshes the app.
-# Sends once per day (stored in SQLite).
-import sqlite3
-from datetime import time as dtime
-from db import ensure_auto_send_table
+# IMPORTANT:
+# Streamlit only runs code when the app is opened/refreshed.
+# So "automatic Saturday sending" will only happen if the app runs at that time.
 
-def ensure_auto_send_table(db_path: Path):
-    con = sqlite3.connect(str(db_path))
-    cur = con.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS auto_send_log (
-            send_date TEXT PRIMARY KEY,
-            sent_at   TEXT
-        )
-    """)
-    con.commit()
-    con.close()
+import sqlite3
 
 def already_sent_today(db_path: Path, date_str: str) -> bool:
     con = sqlite3.connect(str(db_path))
@@ -96,38 +85,39 @@ def mark_sent_today(db_path: Path, date_str: str, ts_iso: str):
     con.close()
 
 def should_auto_send(now: datetime) -> bool:
-    # Saturday only (5) + after 09:00
     return (now.weekday() == SEND_DAY_WEEKDAY) and (now.time() >= SEND_AFTER_TIME)
 
-# ✅ ALWAYS create the table at startup
-ensure_auto_send_table(db_path)
+def run_auto_send(db_path: Path):
+    # Make sure table exists
+    ensure_auto_send_table(db_path)
 
-try:
     now = now_local()
     _, date_str, _, ts_iso = today_labels()
 
-    if (not already_sent_today(db_path, date_str)) and should_auto_send(now):
-        df_now = load_wide_sheet(db_path)
-        birthdays = get_birthdays_for_week(df_now)
+    # Only send once per day
+    if already_sent_today(db_path, date_str):
+        return
 
-        if birthdays:
-            msg = build_birthday_message(birthdays)
+    # Only send on schedule
+    if not should_auto_send(now):
+        return
 
-            # ✅ Send to ALL recipients in the list
-            ok, info = send_whatsapp_message(WHATSAPP_RECIPIENTS, msg)
+    df_now = load_wide_sheet(db_path)
+    birthdays = get_birthdays_for_week(df_now)
 
-            if ok:
-                mark_sent_today(db_path, date_str, ts_iso)
-                st.sidebar.success("✅ Auto WhatsApp sent today")
-            else:
-                st.sidebar.warning(f"⚠️ Auto WhatsApp failed: {info}")
-        else:
-            st.sidebar.info("No birthdays to send today.")
+    if not birthdays:
+        return
 
-except Exception as e:
-    st.sidebar.warning(f"⚠️ Auto send error: {e}")
+    msg = build_birthday_message(birthdays)
 
+    # ✅ Send to ALL recipients
+    ok, info = send_whatsapp_message(WHATSAPP_RECIPIENTS, msg)
 
+    if ok:
+        mark_sent_today(db_path, date_str, ts_iso)
+        st.sidebar.success("✅ Auto WhatsApp sent today")
+    else:
+        st.sidebar.warning(f"⚠️ Auto WhatsApp failed: {info}")
 
 
 
@@ -162,7 +152,6 @@ BACKUP_LEARNERS_CSV = "learners_backup.csv"
 META_WA_TOKEN = os.environ.get("META_WA_TOKEN", "").strip()
 META_WA_PHONE_NUMBER_ID = os.environ.get("META_WA_PHONE_NUMBER_ID", "").strip()
 META_WA_API_VERSION = os.environ.get("META_WA_API_VERSION", "v22.0").strip()
-
 
 
 # ------------------ UTILITIES ------------------
@@ -607,6 +596,12 @@ with st.sidebar:
 
     init_db(db_path)
     ensure_auto_send_table(db_path)
+
+    # ✅ Auto-send runs here (db_path exists now)
+try:
+    run_auto_send(db_path)
+except Exception as e:
+    st.sidebar.warning(f"⚠️ Auto send error: {e}")
 
     # ✅ Restore learners if DB is empty (seeds from attendance_clean.csv)
     try:
@@ -1145,6 +1140,7 @@ if st.button("Send Test WhatsApp", use_container_width=True):
         st.error(info)
 
 st.markdown("</div>", unsafe_allow_html=True)
+
 
 
 
