@@ -1,16 +1,9 @@
-# db.py — SQLite backend for Tutor Class Attendance Register (UPDATED + CLEAN)
-# ✅ Fixes:
-# - Removed duplicate ensure_auto_send_table()
-# - Adds whatsapp_recipients table
-# - Uses per-recipient send log (YYYY-MM-DD|+27...)
-# - Keeps backward compatibility for app.py that calls:
-#   already_sent_today(db_path, date_str) and mark_sent_today(db_path, date_str, ts_iso)
-# - Keeps your existing attendance / learners / inout features
+# db.py — SQLite backend for Tutor Class Attendance Register
 
 import sqlite3
 from pathlib import Path
-from typing import List
 import pandas as pd
+from typing import List, Optional, Dict
 
 
 # ================== HELPERS ==================
@@ -21,7 +14,7 @@ def norm_barcode(code: str) -> str:
     return s if s != "" else "0"
 
 
-def get_conn(db_path: Path) -> sqlite3.Connection:
+def get_conn(db_path: Path):
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
@@ -30,84 +23,59 @@ def get_conn(db_path: Path) -> sqlite3.Connection:
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> List[str]:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return [r[1] for r in rows]  # column name is index 1
+    return [r[1] for r in rows]  # col name is index 1
 
 
-def _send_key(date_str: str, phone: str) -> str:
-    return f"{date_str}|{phone}"
+# ================== WHATSAPP TABLES + MIGRATION ==================
 
-
-# ================== WHATSAPP TABLES (RECIPIENTS + LOG) ==================
-
-def ensure_auto_send_table(db_path: Path):
+def ensure_whatsapp_tables(db_path: Path):
     """
     Creates tables required for WhatsApp:
     1) whatsapp_recipients: stores who should receive messages
     2) auto_send_log: stores per-recipient-per-day send log using a unique key
        key format: YYYY-MM-DD|+2783....
-    Also attempts to migrate older schema if it existed.
+    Also migrates older auto_send_log schema if found.
     """
     db_path = Path(db_path)
     con = sqlite3.connect(str(db_path))
     cur = con.cursor()
 
-    # Recipients
+    # --- recipients table ---
     cur.execute("""
         CREATE TABLE IF NOT EXISTS whatsapp_recipients (
             phone TEXT PRIMARY KEY,     -- E.164 format e.g. +2783...
-            label TEXT,                 -- optional
+            label TEXT,                 -- optional: "Thoko", "Cathy"
             active INTEGER NOT NULL DEFAULT 1
         )
     """)
 
-    # Try to detect old auto_send_log schema safely
-    # Old schema: (send_date TEXT PRIMARY KEY, sent_at TEXT)
-    # New schema: (key TEXT PRIMARY KEY, sent_at TEXT)
-    try:
-        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='auto_send_log'")
-        exists = cur.fetchone() is not None
+    # --- auto_send_log table (new schema) ---
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS auto_send_log (
+            key TEXT PRIMARY KEY,       -- e.g. "2026-01-29|+27836280453"
+            sent_at TEXT
+        )
+    """)
 
-        if not exists:
-            # Create new schema directly
+    # --- Migration: if old schema exists, try to migrate ---
+    try:
+        cols = _table_columns(con, "auto_send_log")
+        if "send_date" in cols and "key" not in cols:
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS auto_send_log (
-                    key TEXT PRIMARY KEY,     -- e.g. "2026-01-29|+2783..." OR "2026-01-29|ALL"
+                CREATE TABLE IF NOT EXISTS auto_send_log_v2 (
+                    key TEXT PRIMARY KEY,
                     sent_at TEXT
                 )
             """)
-        else:
-            # Table exists -> inspect columns
-            cols = _table_columns(con, "auto_send_log")
-            if "key" not in cols:
-                # It's likely the old schema (send_date)
-                # Create v2 table
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS auto_send_log_v2 (
-                        key TEXT PRIMARY KEY,
-                        sent_at TEXT
-                    )
-                """)
-                if "send_date" in cols:
-                    # migrate old daily log into new one with "ALL"
-                    cur.execute("""
-                        INSERT OR IGNORE INTO auto_send_log_v2(key, sent_at)
-                        SELECT send_date || '|ALL', sent_at
-                        FROM auto_send_log
-                    """)
-                # swap
-                cur.execute("DROP TABLE auto_send_log")
-                cur.execute("ALTER TABLE auto_send_log_v2 RENAME TO auto_send_log")
-
-            # If it already has 'key', we are good.
-            # If it has other unexpected columns, we leave it as-is.
+            cur.execute("""
+                INSERT OR IGNORE INTO auto_send_log_v2(key, sent_at)
+                SELECT send_date || '|ALL', sent_at
+                FROM auto_send_log
+            """)
+            cur.execute("DROP TABLE auto_send_log")
+            cur.execute("ALTER TABLE auto_send_log_v2 RENAME TO auto_send_log")
     except Exception:
-        # If anything fails, ensure table exists with the new schema (best effort)
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS auto_send_log (
-                key TEXT PRIMARY KEY,
-                sent_at TEXT
-            )
-        """)
+        pass
 
     con.commit()
     con.close()
@@ -166,6 +134,10 @@ def get_whatsapp_recipients(db_path: Path, only_active: bool = True) -> List[str
     return [str(x).strip() for x in df["phone"].tolist() if str(x).strip()]
 
 
+def _send_key(date_str: str, phone: str) -> str:
+    return f"{date_str}|{phone}"
+
+
 def already_sent_today_for_recipient(db_path: Path, date_str: str, phone: str) -> bool:
     key = _send_key(date_str, str(phone).strip())
     con = sqlite3.connect(str(db_path))
@@ -188,38 +160,14 @@ def mark_sent_today_for_recipient(db_path: Path, date_str: str, phone: str, ts_i
     con.close()
 
 
-# ✅ Backwards-compatible helpers (used by your app.py)
-# These treat "sent today" as a single global event (key = YYYY-MM-DD|ALL)
-
-def already_sent_today(db_path: Path, date_str: str) -> bool:
-    key = _send_key(date_str, "ALL")
-    con = sqlite3.connect(str(db_path))
-    cur = con.cursor()
-    cur.execute("SELECT 1 FROM auto_send_log WHERE key = ?", (key,))
-    row = cur.fetchone()
-    con.close()
-    return bool(row)
-
-
-def mark_sent_today(db_path: Path, date_str: str, ts_iso: str):
-    key = _send_key(date_str, "ALL")
-    con = sqlite3.connect(str(db_path))
-    cur = con.cursor()
-    cur.execute(
-        "INSERT OR REPLACE INTO auto_send_log(key, sent_at) VALUES (?, ?)",
-        (key, ts_iso)
-    )
-    con.commit()
-    con.close()
-
-
-# ================== DB INIT ==================
+# ================== DB INIT + MIGRATIONS ==================
 
 def init_db(db_path: Path):
+    db_path = Path(db_path)
     conn = get_conn(db_path)
     cur = conn.cursor()
 
-    # learners registry
+    # learners = your main registry
     cur.execute("""
     CREATE TABLE IF NOT EXISTS learners (
         barcode TEXT PRIMARY KEY,
@@ -232,27 +180,33 @@ def init_db(db_path: Path):
     )
     """)
 
-    # list of class dates (optional)
+    # dates = optional list of class dates
     cur.execute("""
     CREATE TABLE IF NOT EXISTS class_dates (
         date_label TEXT PRIMARY KEY
     )
     """)
 
-    # attendance marks (store only present)
+    # attendance marks (Present/Absent). We store only present marks.
     cur.execute("""
     CREATE TABLE IF NOT EXISTS attendance_marks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date_label TEXT NOT NULL,
-        date_str   TEXT NOT NULL,
-        time_str   TEXT NOT NULL,
+        date_label TEXT NOT NULL,   -- e.g. 22-Jan
+        date_str   TEXT NOT NULL,   -- e.g. 2026-01-22
+        time_str   TEXT NOT NULL,   -- e.g. 09:30:10
         barcode    TEXT NOT NULL,
         present    INTEGER NOT NULL DEFAULT 1,
         FOREIGN KEY(barcode) REFERENCES learners(barcode) ON DELETE CASCADE
     )
     """)
 
-    # in/out log
+    # prevent duplicate present mark per learner+date_label
+    cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_unique
+        ON attendance_marks(date_label, barcode, present)
+    """)
+
+    # IN/OUT log
     cur.execute("""
     CREATE TABLE IF NOT EXISTS inout_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -266,19 +220,25 @@ def init_db(db_path: Path):
     )
     """)
 
+    # Helpful indexes
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_inout_date_barcode ON inout_log(date_str, barcode)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_inout_ts ON inout_log(ts_iso)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_marks_date ON attendance_marks(date_str)")
+
     conn.commit()
     conn.close()
 
-    # ensure WhatsApp tables exist too
-    ensure_auto_send_table(db_path)
+    # Ensure WhatsApp tables exist too
+    ensure_whatsapp_tables(db_path)
 
 
-# ================== SEED / IMPORT ==================
+# ================== SEED / IMPORT FROM CSV ==================
 
 def seed_learners_from_csv_if_empty(db_path: Path, csv_path: str = "attendance_clean.csv") -> int:
     """
     If learners table is empty, import learners from a CSV file.
-    Returns number of imported rows. Safe: won't overwrite if DB already has learners.
+    Returns number of imported rows.
+    Safe: will NOT overwrite learners if DB already has learners.
     """
     try:
         existing = get_learners_df(db_path)
@@ -299,6 +259,7 @@ def seed_learners_from_csv_if_empty(db_path: Path, csv_path: str = "attendance_c
             df[c] = ""
 
     learners_df = df[needed].copy()
+
     learners_df["Barcode"] = learners_df["Barcode"].astype(str).str.strip()
     learners_df = learners_df[learners_df["Barcode"] != ""]
     learners_df = learners_df.drop_duplicates(subset=["Barcode"]).reset_index(drop=True)
@@ -386,6 +347,25 @@ def delete_learner_by_barcode(db_path: Path, barcode: str) -> int:
     return deleted
 
 
+def get_learner_by_barcode(db_path: Path, barcode: str) -> Optional[Dict[str, str]]:
+    """
+    Returns learner dict by matching barcode_norm so scans like 0001 == 1.
+    """
+    bn = norm_barcode(barcode)
+    conn = get_conn(db_path)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT barcode AS Barcode, name AS Name, surname AS Surname,
+               grade AS Grade, area AS Area, dob AS "Date Of Birth"
+        FROM learners
+        WHERE barcode_norm = ?
+        LIMIT 1
+    """, (bn,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
 # ================== DATES ==================
 
 def add_class_date(db_path: Path, date_label: str):
@@ -423,10 +403,6 @@ def get_learners_df(db_path: Path) -> pd.DataFrame:
 
 
 def get_wide_sheet(db_path: Path) -> pd.DataFrame:
-    """
-    Returns a dataframe like your old CSV:
-    Barcode, Name, Surname, Grade, Area, Date Of Birth, plus date columns like 22-Jan
-    """
     learners = get_learners_df(db_path)
 
     conn = get_conn(db_path)
@@ -457,12 +433,69 @@ def get_wide_sheet(db_path: Path) -> pd.DataFrame:
         pv.rename(columns={"barcode": "Barcode"}, inplace=True)
         wide = learners.merge(pv, on="Barcode", how="left")
 
-    # ensure all date columns exist
     for d in sorted(all_dates, key=str):
         if d not in wide.columns:
             wide[d] = ""
 
     return wide.fillna("").astype(str)
+
+
+def get_present_today_df(db_path: Path, date_str: str) -> pd.DataFrame:
+    conn = get_conn(db_path)
+    df = pd.read_sql("""
+        SELECT DISTINCT
+            l.barcode AS Barcode,
+            l.name AS Name,
+            l.surname AS Surname,
+            l.grade AS Grade
+        FROM attendance_marks m
+        JOIN learners l ON l.barcode = m.barcode
+        WHERE m.date_str = ? AND m.present = 1
+        ORDER BY l.surname, l.name
+    """, conn, params=(date_str,))
+    conn.close()
+    return df.fillna("").astype(str)
+
+
+def get_grade_summary_for_month(db_path: Path, month_prefix: str) -> pd.DataFrame:
+    """
+    month_prefix example: "2026-01" (YYYY-MM)
+    Attendance percent = present_count / expected_sessions_in_month
+    expected_sessions_in_month = number of unique date_str in that month found in attendance_marks or class_dates labels not stored as date_str
+    We will use attendance_marks distinct date_str count for that month as "sessions so far".
+    """
+    conn = get_conn(db_path)
+    # sessions recorded this month
+    sessions_df = pd.read_sql("""
+        SELECT COUNT(DISTINCT date_str) AS sessions
+        FROM attendance_marks
+        WHERE date_str LIKE ?
+    """, conn, params=(month_prefix + "%",))
+    sessions = int(sessions_df.iloc[0]["sessions"]) if not sessions_df.empty else 0
+    sessions = max(sessions, 1)  # avoid division by zero
+
+    df = pd.read_sql("""
+        SELECT
+            l.grade AS Grade,
+            COUNT(DISTINCT l.barcode) AS Learners,
+            COUNT(DISTINCT m.barcode || '|' || m.date_str) AS PresentMarks
+        FROM learners l
+        LEFT JOIN attendance_marks m
+          ON m.barcode = l.barcode
+         AND m.present = 1
+         AND m.date_str LIKE ?
+        GROUP BY l.grade
+        ORDER BY l.grade
+    """, conn, params=(month_prefix + "%",))
+    conn.close()
+
+    if df.empty:
+        return pd.DataFrame(columns=["Grade", "Learners", "PresentMarks", "Sessions", "AvgAttendance%"])
+
+    df["Sessions"] = sessions
+    # average attendance per learner across sessions (rough)
+    df["AvgAttendance%"] = ((df["PresentMarks"] / (df["Learners"].replace(0, 1) * sessions)) * 100).round(1)
+    return df.fillna("").astype(str)
 
 
 # ================== ATTENDANCE + LOGS ==================
@@ -473,25 +506,20 @@ def insert_present_mark(db_path: Path, date_label: str, date_str: str, time_str:
 
     cur.execute("INSERT OR IGNORE INTO class_dates(date_label) VALUES (?)", (date_label,))
 
-    cur.execute("""
-        SELECT 1 FROM attendance_marks
-        WHERE date_label=? AND barcode=? AND present=1
-        LIMIT 1
-    """, (date_label, barcode))
-    exists = cur.fetchone() is not None
-
-    if not exists:
+    # unique index prevents duplicates
+    try:
         cur.execute("""
             INSERT INTO attendance_marks (date_label, date_str, time_str, barcode, present)
             VALUES (?, ?, ?, ?, 1)
         """, (date_label, date_str, time_str, barcode))
+    except sqlite3.IntegrityError:
+        pass
 
     conn.commit()
     conn.close()
 
 
-def append_inout_log(db_path: Path, ts_iso: str, date_str: str, time_str: str,
-                    barcode: str, name: str, surname: str, action: str):
+def append_inout_log(db_path: Path, ts_iso: str, date_str: str, time_str: str, barcode: str, name: str, surname: str, action: str):
     conn = get_conn(db_path)
     cur = conn.cursor()
     cur.execute("""
@@ -510,6 +538,19 @@ def get_inout_log(db_path: Path) -> pd.DataFrame:
         FROM inout_log
         ORDER BY ts_iso
     """, conn)
+    conn.close()
+    return df.fillna("").astype(str)
+
+
+def get_inout_log_for_date(db_path: Path, date_str: str) -> pd.DataFrame:
+    conn = get_conn(db_path)
+    df = pd.read_sql("""
+        SELECT ts_iso AS Timestamp, time_str AS Time,
+               barcode AS Barcode, name AS Name, surname AS Surname, action AS Action
+        FROM inout_log
+        WHERE date_str = ?
+        ORDER BY ts_iso
+    """, conn, params=(date_str,))
     conn.close()
     return df.fillna("").astype(str)
 
