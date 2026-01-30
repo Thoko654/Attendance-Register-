@@ -30,7 +30,6 @@ from db import (
     seed_learners_from_csv_if_empty,
 )
 
-
 # ------------------ CONFIG ------------------
 
 APP_TZ = os.environ.get("APP_TIMEZONE", "Africa/Johannesburg")
@@ -39,22 +38,21 @@ TZ = ZoneInfo(APP_TZ)
 DB_DEFAULT = "app.db"
 DB_PATH = Path(os.environ.get("DB_PATH", DB_DEFAULT))
 
-WHATSAPP_RECIPIENTS = [
-    "+27836280453",
-    "+27672291308",
-]
+# WhatsApp recipients (E.164)
+WHATSAPP_RECIPIENTS = ["+27836280453", "+27672291308"]
 
+# Auto-send schedule
 SEND_DAY_WEEKDAY = 5           # Saturday
 SEND_AFTER_TIME = dtime(9, 0)  # 09:00
 
+DEFAULT_GRADE_CAPACITY = 20    # used for grade % benchmark
 BACKUP_LEARNERS_CSV = "learners_backup.csv"
 
 META_WA_TOKEN = (st.secrets.get("META_WA_TOKEN", "") if hasattr(st, "secrets") else "").strip() or os.environ.get("META_WA_TOKEN", "").strip()
 META_WA_PHONE_NUMBER_ID = (st.secrets.get("META_WA_PHONE_NUMBER_ID", "") if hasattr(st, "secrets") else "").strip() or os.environ.get("META_WA_PHONE_NUMBER_ID", "").strip()
 META_WA_API_VERSION = (st.secrets.get("META_WA_API_VERSION", "") if hasattr(st, "secrets") else "").strip() or os.environ.get("META_WA_API_VERSION", "v22.0").strip()
 
-
-# ------------------ TIME HELPERS ------------------
+# ------------------ TIME ------------------
 
 def now_local() -> datetime:
     return datetime.now(TZ)
@@ -63,16 +61,17 @@ def today_labels():
     n = now_local()
     day = str(int(n.strftime("%d")))
     mon = n.strftime("%b")
-    date_col = f"{day}-{mon}"
-    date_iso = n.strftime("%Y-%m-%d")
+    date_label = f"{day}-{mon}"          # e.g. 30-Jan
+    date_iso = n.strftime("%Y-%m-%d")    # e.g. 2026-01-30
+    time_str = n.strftime("%H:%M:%S")
     ts_iso = n.isoformat(timespec="seconds")
-    return date_col, date_iso, ts_iso
+    return date_label, date_iso, time_str, ts_iso
 
 def get_date_columns(df: pd.DataFrame) -> list[str]:
     cols = []
     for c in df.columns:
         parts = str(c).split("-")
-        if len(parts) == 2 and parts[0].isdigit():
+        if len(parts) == 2 and parts[0].isdigit() and len(parts[0]) <= 2:
             cols.append(c)
 
     def _key(x: str):
@@ -83,44 +82,15 @@ def get_date_columns(df: pd.DataFrame) -> list[str]:
 
     return sorted(cols, key=_key)
 
-
-# ------------------ BACKUP / RESTORE LEARNERS ------------------
-
-def save_learners_backup(df_learners: pd.DataFrame):
-    try:
-        df_learners.to_csv(BACKUP_LEARNERS_CSV, index=False)
-    except Exception:
-        pass
-
-def restore_learners_if_db_empty():
-    try:
-        current = get_learners_df(DB_PATH).fillna("").astype(str)
-        if len(current) > 0:
-            return
-        backup_path = Path(BACKUP_LEARNERS_CSV)
-        if not backup_path.exists():
-            return
-        backup_df = pd.read_csv(backup_path).fillna("").astype(str)
-        required = ["Name", "Surname", "Barcode"]
-        if not all(c in backup_df.columns for c in required):
-            return
-        for c in ["Grade", "Area", "Date Of Birth"]:
-            if c not in backup_df.columns:
-                backup_df[c] = ""
-        backup_df = backup_df[["Name","Surname","Barcode","Grade","Area","Date Of Birth"]].copy()
-        backup_df["Barcode"] = backup_df["Barcode"].astype(str).map(norm_barcode)
-        backup_df = backup_df[backup_df["Barcode"] != ""].reset_index(drop=True)
-        replace_learners_from_df(DB_PATH, backup_df)
-    except Exception:
-        pass
-
-
 # ------------------ TRACKING ------------------
 
 def compute_tracking(df: pd.DataFrame) -> pd.DataFrame:
     date_cols = get_date_columns(df)
-    if not date_cols:
-        return pd.DataFrame(columns=["Name","Surname","Barcode","Grade","Area","Present","Absent","Attendance %","Last present"])
+    if df is None or df.empty or not date_cols:
+        return pd.DataFrame(columns=[
+            "Name", "Surname", "Barcode", "Grade", "Area",
+            "Sessions", "Present", "Absent", "Attendance %", "Last present"
+        ])
 
     present_mat = df[date_cols].applymap(lambda x: 1 if str(x).strip() == "1" else 0)
     sessions = len(date_cols)
@@ -134,19 +104,19 @@ def compute_tracking(df: pd.DataFrame) -> pd.DataFrame:
         last_present.append(date_cols[max(idxs)] if idxs else "—")
 
     result = pd.DataFrame({
-        "Name": df.get("Name",""),
-        "Surname": df.get("Surname",""),
-        "Barcode": df.get("Barcode",""),
-        "Grade": df.get("Grade",""),
-        "Area": df.get("Area",""),
+        "Name": df.get("Name", ""),
+        "Surname": df.get("Surname", ""),
+        "Barcode": df.get("Barcode", ""),
+        "Grade": df.get("Grade", ""),
+        "Area": df.get("Area", ""),
+        "Sessions": sessions,
         "Present": present_counts,
         "Absent": absent_counts,
         "Attendance %": pct,
-        "Last present": last_present
+        "Last present": last_present,
     })
 
-    return result.sort_values(["Grade","Attendance %","Name"], ascending=[True,False,True]).reset_index(drop=True)
-
+    return result.sort_values(by=["Attendance %", "Name", "Surname"], ascending=[False, True, True]).reset_index(drop=True)
 
 # ------------------ BIRTHDAYS ------------------
 
@@ -162,7 +132,7 @@ def parse_dob(dob_str: str):
     return None
 
 def get_birthdays_for_week(df: pd.DataFrame, today=None):
-    if "Date Of Birth" not in df.columns:
+    if df is None or df.empty or "Date Of Birth" not in df.columns:
         return []
     if today is None:
         today = now_local().date()
@@ -175,7 +145,6 @@ def get_birthdays_for_week(df: pd.DataFrame, today=None):
         dob = parse_dob(r.get("Date Of Birth", ""))
         if not dob:
             continue
-
         try:
             birthday_this_year = dob.replace(year=today.year)
         except ValueError:
@@ -191,10 +160,10 @@ def get_birthdays_for_week(df: pd.DataFrame, today=None):
             continue
 
         results.append({
-            "Name": str(r.get("Name","")),
-            "Surname": str(r.get("Surname","")),
-            "Grade": str(r.get("Grade","")),
-            "DOB": str(r.get("Date Of Birth","")),
+            "Name": str(r.get("Name", "")),
+            "Surname": str(r.get("Surname", "")),
+            "Grade": str(r.get("Grade", "")),
+            "DOB": str(r.get("Date Of Birth", "")),
             "Kind": kind,
         })
     return results
@@ -202,16 +171,14 @@ def get_birthdays_for_week(df: pd.DataFrame, today=None):
 def build_birthday_message(birthdays: list[dict]) -> str:
     if not birthdays:
         return "No birthdays this week or in the next 7 days."
-
     lines = ["🎂 Tutor Class Birthdays (this week)"]
     for b in birthdays:
         full_name = f"{b['Name']} {b['Surname']}".strip()
-        grade = b.get("Grade","").strip()
+        grade = b.get("Grade", "").strip()
         label = "🎉 Today" if b["Kind"] == "today" else ("🎂 Belated" if b["Kind"] == "belated" else "🎁 Upcoming")
         extra = f" (Grade {grade})" if grade else ""
         lines.append(f"{label}: {full_name}{extra} — DOB {b['DOB']}")
     return "\n".join(lines)
-
 
 # ------------------ WHATSAPP (META CLOUD API) ------------------
 
@@ -245,99 +212,86 @@ def send_whatsapp_message(to_numbers: list[str], body: str) -> tuple[bool, str]:
         try:
             r = requests.post(url, headers=headers, json=payload, timeout=20)
             data = r.json() if r.content else {}
+
             if r.status_code in (200, 201):
                 sent_any = True
                 results.append(f"{to_e164}: SENT")
             else:
                 err = data.get("error", {}) if isinstance(data, dict) else {}
-                results.append(f"{to_e164}: FAILED (HTTP {r.status_code}) {err.get('message','')}")
+                emsg = err.get("message", str(data))
+                ecode = err.get("code", "")
+                results.append(f"{to_e164}: FAILED (HTTP {r.status_code} code {ecode} - {emsg})")
         except Exception as e:
             results.append(f"{to_e164}: FAILED ({e})")
 
     return (True, " | ".join(results)) if sent_any else (False, " | ".join(results) if results else "No recipients.")
 
-
-# ------------------ AUTO SEND (BIRTHDAYS) ------------------
+# ------------------ AUTO SEND ------------------
 
 def should_auto_send(now: datetime) -> bool:
     return (now.weekday() == SEND_DAY_WEEKDAY) and (now.time() >= SEND_AFTER_TIME)
 
-def run_auto_send():
-    ensure_auto_send_table(DB_PATH)
-
+def run_auto_send(db_path: Path):
+    ensure_auto_send_table(db_path)
     now = now_local()
-    _, date_iso, ts_iso = today_labels()
+    date_label, date_iso, _, ts_iso = today_labels()
 
     if not should_auto_send(now):
         return
-    if already_sent_today(DB_PATH, date_iso):
+    if already_sent_today(db_path, date_iso):
         return
 
-    df_now = get_wide_sheet(DB_PATH)
-    birthdays = get_birthdays_for_week(df_now)
-
-    # mark sent even if none (so it won't keep retrying)
-    if not birthdays:
-        mark_sent_today(DB_PATH, date_iso, ts_iso)
-        return
-
+    df = get_wide_sheet(db_path)
+    birthdays = get_birthdays_for_week(df)
     msg = build_birthday_message(birthdays)
+
     ok, info = send_whatsapp_message(WHATSAPP_RECIPIENTS, msg)
     if ok:
-        mark_sent_today(DB_PATH, date_iso, ts_iso)
-        st.sidebar.success("✅ Auto WhatsApp sent today")
+        mark_sent_today(db_path, date_iso, ts_iso)
+        st.sidebar.success("✅ Birthday WhatsApp auto-sent today")
     else:
-        st.sidebar.warning(f"⚠️ Auto WhatsApp failed: {info}")
-
+        st.sidebar.warning(f"⚠️ Auto-send failed: {info}")
 
 # ------------------ PAGE SETUP ------------------
 
 st.set_page_config(page_title="Tutor Class Attendance Register 2026", page_icon="✅", layout="wide")
 
-st.markdown(
-    """
-    <style>
-      .center-title { text-align: center; font-size: 2.2rem; font-weight: 700; margin: 0.1rem 0 0.3rem 0; color: #111; }
-      .center-sub { text-align: center; font-size: 0.95rem; color: #555; margin-bottom: 0.8rem; }
-      .card { padding: 14px 16px; border: 1px solid #eee; border-radius: 14px; background: #fff; }
-      .small-help { font-size: 13px; color: #666; line-height: 1.4; }
-      /* Make tab labels clearer */
-      button[data-baseweb="tab"] { font-size: 15px !important; }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
+st.markdown("""
+<style>
+.center-wrap { text-align: center; }
+.title { font-size: 42px; font-weight: 800; margin: 6px 0 0 0; color: #111; }
+.sub { font-size: 14px; color: #555; margin: 6px 0 10px 0; }
+.card { padding: 18px 18px; border: 1px solid #eee; border-radius: 16px; background: #fff; }
+.small-help { font-size: 13px; color: #666; line-height: 1.4; }
+</style>
+""", unsafe_allow_html=True)
 
-
-# ------------------ DB INIT / RESTORE / SEED ------------------
+# ------------------ DB INIT / SEED ------------------
 
 init_db(DB_PATH)
-restore_learners_if_db_empty()
 seed_learners_from_csv_if_empty(DB_PATH)
 
+# Run auto-send safely
 try:
-    run_auto_send()
+    run_auto_send(DB_PATH)
 except Exception as e:
     st.sidebar.warning(f"⚠️ Auto-send error: {e}")
 
-
-# ------------------ HEADER ------------------
+# ------------------ HEADER (CENTERED) ------------------
 
 logo_b64 = ""
 if Path("tzu_chi_logo.png").exists():
     logo_b64 = base64.b64encode(Path("tzu_chi_logo.png").read_bytes()).decode("utf-8")
 
-date_col, date_iso, ts_iso = today_labels()
+date_label, date_iso, time_str, ts_iso = today_labels()
 
 st.markdown(
     f"""
-    <div class="card">
-      <div style="display:flex; justify-content:center; margin-bottom:6px;">
-        {"<img src='data:image/png;base64," + logo_b64 + "' width='120'/>" if logo_b64 else ""}
-      </div>
-      <div class="center-title">Tutor Class Attendance Register 2026</div>
-      <div class="center-sub">
-        Today: <b>{date_col}</b> · Timezone: <b>{APP_TZ}</b> · DB: <b>{DB_PATH.name}</b>
+    <div class="card center-wrap">
+      {"<img src='data:image/png;base64," + logo_b64 + "' width='140' style='margin-bottom:10px;'/>" if logo_b64 else ""}
+      <div class="title">Tutor Class Attendance Register 2026</div>
+      <div class="sub">
+        Today: <b>{date_label}</b> · Timezone: <b>{APP_TZ}</b> · DB: <b>{DB_PATH.name}</b>
       </div>
     </div>
     """,
@@ -346,290 +300,316 @@ st.markdown(
 
 st.write("")
 
-
-# ------------------ SIDEBAR (OPTIONAL) ------------------
+# ------------------ SIDEBAR (WHATSAPP TEST) ------------------
 
 with st.sidebar.expander("📩 WhatsApp Connection Test (Meta)", expanded=False):
-    st.markdown(
-        """
-        <div class="small-help">
-          Send a test message using Meta WhatsApp Cloud API.<br>
-          <b>Note:</b> In Meta test mode, the recipient must be added as a test number.
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    st.markdown("""<div class="small-help">
+    Send a test message using Meta WhatsApp Cloud API.<br>
+    <b>Note:</b> In Meta test mode, the recipient must be added as a test number.
+    </div>""", unsafe_allow_html=True)
+
     default_to = WHATSAPP_RECIPIENTS[0] if WHATSAPP_RECIPIENTS else "+27..."
-    test_to = st.text_input("Test recipient number (E.164 format)", value=default_to)
+    test_to = st.text_input("Test recipient number (E.164)", value=default_to)
     test_msg = st.text_area("Message", value="Hello! Test message from Tutor Class Attendance ✅")
     if st.button("Send Test WhatsApp", use_container_width=True):
         ok, info = send_whatsapp_message([test_to], test_msg)
-        st.success(info) if ok else st.error(info)
+        (st.success if ok else st.error)(info)
 
+# ------------------ UI HELPERS ------------------
 
-# ------------------ LOAD DATA ------------------
+def safe_present_absent(df: pd.DataFrame, date_col: str, grade: str | None = None):
+    if df is None or df.empty:
+        return df.iloc[0:0].copy(), df.iloc[0:0].copy()
+    if date_col not in df.columns:
+        return df.iloc[0:0].copy(), df.copy()
 
-def load_wide():
-    return get_wide_sheet(DB_PATH)
+    temp = df.copy()
+    if grade and "Grade" in temp.columns:
+        temp = temp[temp["Grade"].astype(str) == str(grade)]
 
-df = load_wide()
-date_cols = get_date_columns(df)
+    present = temp[temp[date_col].astype(str).str.strip() == "1"].copy()
+    absent = temp[temp[date_col].astype(str).str.strip() != "1"].copy()
+    return present, absent
 
+def to_csv_bytes(df: pd.DataFrame) -> bytes:
+    return df.to_csv(index=False).encode("utf-8")
+
+# ------------------ SCAN HANDLER (AUTO SUBMIT) ------------------
+
+def handle_scan_submit():
+    code = st.session_state.get("scan_code", "")
+    bc = norm_barcode(code)
+    if not bc:
+        return
+
+    learners = get_learners_df(DB_PATH)
+    if learners.empty or bc not in learners["Barcode"].astype(str).map(norm_barcode).tolist():
+        st.session_state["scan_status"] = f"❌ Barcode not found: {bc}"
+        st.session_state["scan_code"] = ""
+        return
+
+    date_label, date_iso, time_str, ts_iso = today_labels()
+
+    # Ensure date exists for everyone (optional but helpful)
+    add_class_date(DB_PATH, date_label, date_iso)
+
+    # Mark present
+    insert_present_mark(DB_PATH, bc, date_label, date_iso, ts_iso)
+
+    # IN/OUT
+    action = determine_next_action(DB_PATH, bc)
+    append_inout_log(DB_PATH, bc, action, ts_iso, date_iso, time_str)
+
+    row = learners[learners["Barcode"].astype(str).map(norm_barcode) == bc].iloc[0]
+    full_name = f"{row.get('Name','')} {row.get('Surname','')}".strip()
+    st.session_state["scan_status"] = f"✅ {full_name} marked PRESENT ({action})"
+    st.session_state["scan_code"] = ""  # clear input for next scan
 
 # ------------------ TABS ------------------
 
 tabs = st.tabs(["Scan", "Today", "Grades", "History", "Tracking", "Manage"])
 
-
-# ========== TAB 1: SCAN (AUTO SUBMIT) ==========
-
-def handle_scan():
-    raw = st.session_state.get("scan_input", "")
-    code = norm_barcode(raw)
-    if not code:
-        return
-
-    # Ensure today's class date exists
-    add_class_date(DB_PATH, date_iso, date_col)
-
-    # Mark present
-    insert_present_mark(DB_PATH, date_iso, code, present=1, ts_iso=ts_iso)
-
-    # IN/OUT toggle
-    action = determine_next_action(DB_PATH, date_iso, code)
-    append_inout_log(DB_PATH, date_iso, code, action=action, ts_iso=ts_iso)
-
-    st.session_state["last_scan"] = f"✅ {code} marked Present + {action}"
-    st.session_state["scan_input"] = ""  # clear for next scan
-
+# -------- Scan --------
 with tabs[0]:
-    st.subheader("Scan (Auto Submit)")
-    st.caption("Scan a barcode (or type it). It will submit automatically.")
+    st.subheader("Scan (Auto-submit)")
 
     st.text_input(
         "Scan or type barcode here",
-        key="scan_input",
+        key="scan_code",
         placeholder="Scan barcode...",
-        on_change=handle_scan,
+        on_change=handle_scan_submit,
     )
 
-    if st.session_state.get("last_scan"):
-        st.success(st.session_state["last_scan"])
+    status = st.session_state.get("scan_status", "")
+    if status:
+        st.info(status)
 
-    st.divider()
-
-    st.subheader("Currently IN (Today)")
+    st.write("### Currently IN (Today)")
     try:
-        currently_in = get_currently_in(DB_PATH, date_iso)
-        if currently_in.empty:
-            st.info("No one is currently IN yet.")
+        df_in = get_currently_in(DB_PATH)
+        if df_in.empty:
+            st.caption("No one is currently IN.")
         else:
-            st.dataframe(currently_in, use_container_width=True, hide_index=True)
+            st.dataframe(df_in, use_container_width=True, hide_index=True)
     except Exception as e:
-        st.error(f"Currently IN error: {e}")
+        st.error(f"Database error in Currently IN: {e}")
 
-
-# ========== TAB 2: TODAY ==========
-
+# -------- Today --------
 with tabs[1]:
     st.subheader("Today")
 
-    df_today = load_wide()
-    if df_today.empty:
-        st.warning("No learners yet. Add learners in Manage tab.")
+    df = get_wide_sheet(DB_PATH)
+    date_cols = get_date_columns(df)
+    today_col = date_label
+
+    if df.empty:
+        st.warning("No learners found. Add learners in Manage tab first.")
+    elif today_col not in df.columns:
+        st.warning("No attendance marks for today yet. Scan learners first.")
+        st.dataframe(df[["Name","Surname","Barcode","Grade","Area","Date Of Birth"]], use_container_width=True, hide_index=True)
     else:
-        if date_col not in df_today.columns:
-            st.info("No attendance marks yet for today. Scan learners first.")
-        else:
-            total = len(df_today)
-            present = (df_today[date_col].astype(str).str.strip() == "1").sum()
-            absent = total - present
-            pct = round((present / total * 100), 1) if total else 0
+        present, absent = safe_present_absent(df, today_col)
 
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Total Learners", total)
-            c2.metric("Present", int(present))
-            c3.metric("Absent", int(absent))
-            c4.metric("Attendance %", f"{pct}%")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total learners", len(df))
+        c2.metric("Present today", len(present))
+        c3.metric("Absent today", len(absent))
 
-            present_df = df_today[df_today[date_col].astype(str).str.strip() == "1"][["Name","Surname","Barcode","Grade","Area"]]
-            absent_df = df_today[df_today[date_col].astype(str).str.strip() != "1"][["Name","Surname","Barcode","Grade","Area"]]
+        st.write("#### Present")
+        st.dataframe(present, use_container_width=True, hide_index=True)
 
-            st.write("")
-            st.subheader("Present List")
-            st.dataframe(present_df, use_container_width=True, hide_index=True)
+        st.download_button(
+            "⬇️ Download Present (CSV)",
+            data=to_csv_bytes(present),
+            file_name=f"present_{date_label}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
 
-            st.download_button(
-                "⬇️ Download Present (CSV)",
-                present_df.to_csv(index=False).encode("utf-8"),
-                file_name=f"present_{date_iso}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+        st.write("#### Absent")
+        st.dataframe(absent, use_container_width=True, hide_index=True)
 
-            st.write("")
-            st.subheader("Absent List")
-            st.dataframe(absent_df, use_container_width=True, hide_index=True)
+        st.download_button(
+            "⬇️ Download Absent (CSV)",
+            data=to_csv_bytes(absent),
+            file_name=f"absent_{date_label}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
 
-            st.download_button(
-                "⬇️ Download Absent (CSV)",
-                absent_df.to_csv(index=False).encode("utf-8"),
-                file_name=f"absent_{date_iso}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-
-
-# ========== TAB 3: GRADES (PERCENT PER GRADE + DOWNLOADS) ==========
-
+# -------- Grades --------
 with tabs[2]:
     st.subheader("Grades")
 
-    df_g = load_wide()
-    if df_g.empty:
-        st.warning("No learners yet.")
+    df = get_wide_sheet(DB_PATH)
+    if df.empty:
+        st.warning("No learners yet. Add learners in Manage tab.")
     else:
-        # Choose which date to analyze
-        chosen_date = st.selectbox("Choose a date", options=[date_col] + [c for c in date_cols if c != date_col] if date_cols else [date_col])
-
-        if chosen_date not in df_g.columns:
-            st.info("No attendance data for that date yet.")
+        date_cols = get_date_columns(df)
+        if not date_cols:
+            st.warning("No attendance marks yet (no date columns). Scan learners first.")
         else:
-            df_g["__present__"] = df_g[chosen_date].astype(str).str.strip().eq("1").astype(int)
-            df_g["Grade"] = df_g["Grade"].astype(str)
+            chosen_date = st.selectbox("Select date", options=date_cols, index=len(date_cols)-1)
 
-            summary = (
-                df_g.groupby("Grade", dropna=False)
-                .agg(
-                    Total=("Barcode","count"),
-                    Present=("__present__","sum"),
-                )
-                .reset_index()
-            )
-            summary["Attendance %"] = (summary["Present"] / summary["Total"] * 100).round(1)
-
-            st.dataframe(summary, use_container_width=True, hide_index=True)
-
-            st.download_button(
-                "⬇️ Download Grade Summary (CSV)",
-                summary.to_csv(index=False).encode("utf-8"),
-                file_name=f"grade_summary_{chosen_date}.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-
-            st.divider()
-
-            st.subheader("Download Full Attendance Sheet (with % per learner)")
-            tracking = compute_tracking(df_g.drop(columns=["__present__"], errors="ignore"))
-            st.dataframe(tracking, use_container_width=True, hide_index=True)
-
-            st.download_button(
-                "⬇️ Download Full Tracking (CSV)",
-                tracking.to_csv(index=False).encode("utf-8"),
-                file_name="tracking_all.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-
-
-# ========== TAB 4: HISTORY (EDIT MARKS) ==========
-
-with tabs[3]:
-    st.subheader("History (Edit attendance)")
-
-    df_h = load_wide()
-    if df_h.empty:
-        st.warning("No learners yet.")
-    else:
-        if not date_cols and date_col not in df_h.columns:
-            st.info("No attendance dates yet. Scan first.")
-        else:
-            options = date_cols if date_cols else [date_col]
-            selected = st.selectbox("Select date to view/edit", options=options, index=(options.index(date_col) if date_col in options else 0))
-
-            if selected not in df_h.columns:
-                st.info("No attendance data for this date yet.")
+            grades = sorted([g for g in df["Grade"].astype(str).unique().tolist() if g.strip() != ""])
+            if not grades:
+                st.warning("No grades assigned yet. Update Grade values in Manage tab.")
             else:
-                edit_df = df_h[["Barcode","Name","Surname","Grade","Area", selected]].copy()
-                edit_df.rename(columns={selected: "Present (1=Yes)"}, inplace=True)
-                edit_df["Present (1=Yes)"] = edit_df["Present (1=Yes)"].astype(str).str.strip().apply(lambda x: "1" if x == "1" else "")
+                summary_rows = []
+                for g in grades:
+                    g_df = df[df["Grade"].astype(str) == str(g)].copy()
+                    total = len(g_df)
+                    present = 0
+                    if chosen_date in g_df.columns:
+                        present = (g_df[chosen_date].astype(str).str.strip() == "1").sum()
+                    pct = round((present / total * 100), 1) if total else 0.0
 
-                edited = st.data_editor(edit_df, use_container_width=True, hide_index=True, num_rows="fixed")
+                    # Optional benchmark capacity %
+                    bench_pct = round((total / DEFAULT_GRADE_CAPACITY * 100), 1) if DEFAULT_GRADE_CAPACITY else 0.0
 
-                if st.button("💾 Save Changes", use_container_width=True):
-                    # Save: update attendance marks for that date
-                    # Convert label -> we need date_iso. We’ll map by re-adding session using today's iso only if today.
-                    # Practical approach: Only allow editing for today’s real ISO date.
-                    # If you want editing for any date, we must store label->iso mapping.
-                    if selected != date_col:
-                        st.error("Editing past dates needs a label->ISO mapping. For now, edit only today's date.")
-                    else:
-                        add_class_date(DB_PATH, date_iso, date_col)
-                        for _, r in edited.iterrows():
-                            b = norm_barcode(r["Barcode"])
-                            present_val = 1 if str(r["Present (1=Yes)"]).strip() == "1" else 0
-                            insert_present_mark(DB_PATH, date_iso, b, present=present_val, ts_iso=ts_iso)
-                        st.success("Saved.")
+                    summary_rows.append({
+                        "Grade": g,
+                        "Learners": total,
+                        "Present": present,
+                        "Attendance %": pct,
+                        "Capacity benchmark (20) %": bench_pct
+                    })
 
+                summary = pd.DataFrame(summary_rows).sort_values("Grade").reset_index(drop=True)
+                st.write("### Grade Attendance Summary")
+                st.dataframe(summary, use_container_width=True, hide_index=True)
 
-# ========== TAB 5: TRACKING (ATTENDANCE % PER LEARNER) ==========
+                st.download_button(
+                    "⬇️ Download Grade Summary (CSV)",
+                    data=to_csv_bytes(summary),
+                    file_name=f"grade_summary_{chosen_date}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
 
+                st.write("### Download Full Attendance Sheet (wide)")
+                st.download_button(
+                    "⬇️ Download Wide Sheet (CSV)",
+                    data=to_csv_bytes(df),
+                    file_name=f"attendance_wide.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+
+# -------- History --------
+with tabs[3]:
+    st.subheader("History")
+
+    df = get_wide_sheet(DB_PATH)
+    if df.empty:
+        st.warning("No learners yet.")
+    else:
+        date_cols = get_date_columns(df)
+        if not date_cols:
+            st.warning("No attendance marks yet. Scan learners first.")
+        else:
+            chosen_date = st.selectbox("Select a date column", options=date_cols, index=len(date_cols)-1)
+            grade_filter = st.selectbox("Filter by grade (optional)", options=["(All)"] + sorted(df["Grade"].astype(str).unique().tolist()))
+
+            g = None if grade_filter == "(All)" else grade_filter
+            present, absent = safe_present_absent(df, chosen_date, grade=g)
+
+            st.write("#### Present")
+            st.dataframe(present, use_container_width=True, hide_index=True)
+
+            st.write("#### Absent")
+            st.dataframe(absent, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "⬇️ Download History (Present+Absent CSV)",
+                data=to_csv_bytes(pd.concat([present.assign(Status="Present"), absent.assign(Status="Absent")], ignore_index=True)),
+                file_name=f"history_{chosen_date}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+# -------- Tracking --------
 with tabs[4]:
     st.subheader("Tracking")
 
-    df_t = load_wide()
-    if df_t.empty:
+    df = get_wide_sheet(DB_PATH)
+    if df.empty:
         st.warning("No learners yet.")
     else:
-        tracking = compute_tracking(df_t)
-        st.dataframe(tracking, use_container_width=True, hide_index=True)
+        track = compute_tracking(df)
+        st.dataframe(track, use_container_width=True, hide_index=True)
 
         st.download_button(
             "⬇️ Download Tracking (CSV)",
-            tracking.to_csv(index=False).encode("utf-8"),
+            data=to_csv_bytes(track),
             file_name="tracking.csv",
             mime="text/csv",
             use_container_width=True
         )
 
-
-# ========== TAB 6: MANAGE (ADD/EDIT/DELETE + BACKUP) ==========
-
+# -------- Manage --------
 with tabs[5]:
     st.subheader("Manage Learners")
 
-    df_m = get_learners_df(DB_PATH).fillna("").astype(str)
+    st.write("### Add learner")
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    name = c1.text_input("Name")
+    surname = c2.text_input("Surname")
+    barcode = c3.text_input("Barcode")
+    grade = c4.text_input("Grade")
+    area = c5.text_input("Area")
+    dob = c6.text_input("Date Of Birth")
 
-    st.write("### Edit Learners")
-    edited = st.data_editor(df_m, use_container_width=True, hide_index=True, num_rows="dynamic")
+    if st.button("➕ Add / Update learner", use_container_width=True):
+        df_learn = get_learners_df(DB_PATH)
+        new_row = pd.DataFrame([{
+            "Name": name, "Surname": surname, "Barcode": barcode,
+            "Grade": grade, "Area": area, "Date Of Birth": dob
+        }])
+        if df_learn.empty:
+            df_out = new_row
+        else:
+            df_out = pd.concat([df_learn, new_row], ignore_index=True)
 
-    colA, colB = st.columns(2)
-    with colA:
-        if st.button("💾 Save Learners Changes", use_container_width=True):
-            try:
-                replace_learners_from_df(DB_PATH, edited)
-                save_learners_backup(edited)
-                st.success("Learners saved + backed up.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Save error: {e}")
+        # Deduplicate by barcode (last wins)
+        df_out["Barcode"] = df_out["Barcode"].astype(str).map(norm_barcode)
+        df_out = df_out[df_out["Barcode"] != ""].drop_duplicates(subset=["Barcode"], keep="last")
 
-    with colB:
-        if st.button("⬇️ Download Learners (CSV)", use_container_width=True):
-            st.download_button(
-                "Download",
-                edited.to_csv(index=False).encode("utf-8"),
-                file_name="learners.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+        replace_learners_from_df(DB_PATH, df_out)
+        st.success("Saved.")
 
-    st.divider()
-
-    st.write("### Delete Learner")
-    del_code = st.text_input("Barcode to delete", placeholder="Scan or type barcode...")
+    st.write("### Delete learner")
+    del_bc = st.text_input("Barcode to delete")
     if st.button("🗑️ Delete", use_container_width=True):
-        delete_learner_by_barcode(DB_PATH, del_code)
-        st.success("Deleted.")
-        st.rerun()
+        delete_learner_by_barcode(DB_PATH, del_bc)
+        st.success("Deleted (if barcode existed).")
+
+    st.write("### Learners list")
+    learners = get_learners_df(DB_PATH)
+    st.dataframe(learners, use_container_width=True, hide_index=True)
+
+    st.download_button(
+        "⬇️ Download Learners (CSV)",
+        data=to_csv_bytes(learners),
+        file_name="learners.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
+
+    st.write("### Bulk upload learners CSV")
+    up = st.file_uploader("Upload CSV", type=["csv"])
+    if up is not None:
+        try:
+            df_up = pd.read_csv(up).fillna("").astype(str)
+            needed = {"Name", "Surname", "Barcode"}
+            if not needed.issubset(set(df_up.columns)):
+                st.error("CSV must contain at least: Name, Surname, Barcode")
+            else:
+                for c in ["Grade", "Area", "Date Of Birth"]:
+                    if c not in df_up.columns:
+                        df_up[c] = ""
+                df_up = df_up[["Name","Surname","Barcode","Grade","Area","Date Of Birth"]].copy()
+                replace_learners_from_df(DB_PATH, df_up)
+                st.success("Uploaded & replaced learners.")
+        except Exception as e:
+            st.error(f"Upload failed: {e}")
