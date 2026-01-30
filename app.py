@@ -14,10 +14,10 @@ import requests
 
 from db import (
     init_db,
-    ensure_auto_send_table,      # ✅ make sure this exists in db.py
+    ensure_auto_send_table,
     get_wide_sheet,
-    already_sent_today,          # (db.py)
-    mark_sent_today,             # (db.py)
+    already_sent_today,
+    mark_sent_today,
     get_learners_df,
     replace_learners_from_df,
     delete_learner_by_barcode,
@@ -28,6 +28,7 @@ from db import (
     get_currently_in,
     norm_barcode,
     seed_learners_from_csv_if_empty,
+    get_learner_by_barcode,
 )
 
 # ------------------ CONFIG ------------------
@@ -44,12 +45,9 @@ WHATSAPP_RECIPIENTS = [
     "+27672291308",
 ]
 
-# Auto-send schedule
+# Auto-send schedule (Saturday after 09:00)
 SEND_DAY_WEEKDAY = 5           # Saturday
 SEND_AFTER_TIME = dtime(9, 0)  # 09:00
-
-# Grade capacity default
-DEFAULT_GRADE_CAPACITY = 15
 
 # Backup file for permanent restore
 BACKUP_LEARNERS_CSV = "learners_backup.csv"
@@ -67,7 +65,7 @@ def now_local() -> datetime:
 
 def today_col_label() -> str:
     n = now_local()
-    day = str(int(n.strftime("%d")))   # removes leading zero
+    day = str(int(n.strftime("%d")))  # remove leading zero
     mon = n.strftime("%b")
     return f"{day}-{mon}"
 
@@ -75,13 +73,15 @@ def today_labels():
     n = now_local()
     day = str(int(n.strftime("%d")))
     mon = n.strftime("%b")
-    date_col = f"{day}-{mon}"
-    date_str = n.strftime("%Y-%m-%d")
-    time_str = n.strftime("%H:%M:%S")
-    ts = n.isoformat(timespec="seconds")
-    return date_col, date_str, time_str, ts
+    date_col = f"{day}-{mon}"                # e.g. 30-Jan
+    date_str = n.strftime("%Y-%m-%d")        # e.g. 2026-01-30
+    time_str = n.strftime("%H:%M:%S")        # e.g. 09:10:22
+    ts_iso = n.isoformat(timespec="seconds") # e.g. 2026-01-30T09:10:22+02:00
+    return date_col, date_str, time_str, ts_iso
 
 def get_date_columns(df: pd.DataFrame) -> list[str]:
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return []
     cols = []
     for c in df.columns:
         parts = str(c).split("-")
@@ -118,17 +118,17 @@ def get_present_absent(df: pd.DataFrame, date_col: str, grade=None, area=None):
     return present, absent
 
 
-# ------------------ ✅ PERMANENT DATA (BACKUP + RESTORE) ------------------
+# ------------------ BACKUP + RESTORE LEARNERS ------------------
 
 def save_learners_backup(df_learners: pd.DataFrame):
-    """Save a permanent backup learners CSV (works even when SQLite resets)."""
+    """Permanent backup learners CSV (useful if DB resets)."""
     try:
         df_learners.to_csv(BACKUP_LEARNERS_CSV, index=False)
     except Exception:
         pass
 
 def restore_learners_if_db_empty(db_path: Path):
-    """If DB is empty, restore learners from backup CSV."""
+    """If DB learners empty, restore from backup CSV if available."""
     try:
         current = get_learners_df(db_path).fillna("").astype(str)
         if len(current) > 0:
@@ -139,17 +139,19 @@ def restore_learners_if_db_empty(db_path: Path):
             return
 
         backup_df = pd.read_csv(backup_path).fillna("").astype(str)
-        required = ["Name", "Surname", "Barcode"]
+
+        required = ["Barcode", "Name", "Surname"]
         if not all(c in backup_df.columns for c in required):
             return
         if len(backup_df) == 0:
             return
 
+        # Ensure optional columns exist
         for c in ["Grade", "Area", "Date Of Birth"]:
             if c not in backup_df.columns:
                 backup_df[c] = ""
 
-        backup_df = backup_df[["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]].copy()
+        backup_df = backup_df[["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]].copy()
         backup_df["Barcode"] = backup_df["Barcode"].astype(str).str.strip()
         backup_df = backup_df[backup_df["Barcode"] != ""].reset_index(drop=True)
 
@@ -164,7 +166,7 @@ def compute_tracking(df: pd.DataFrame) -> pd.DataFrame:
     date_cols = get_date_columns(df)
     if not date_cols:
         return pd.DataFrame(columns=[
-            "Name", "Surname", "Barcode", "Sessions", "Present", "Absent",
+            "Name", "Surname", "Barcode", "Present", "Absent",
             "Attendance %", "Last present", "Grade", "Area"
         ])
 
@@ -185,7 +187,6 @@ def compute_tracking(df: pd.DataFrame) -> pd.DataFrame:
         "Barcode": df.get("Barcode", ""),
         "Grade": df.get("Grade", ""),
         "Area": df.get("Area", ""),
-        "Sessions": sessions,
         "Present": present_counts,
         "Absent": absent_counts,
         "Attendance %": pct,
@@ -193,7 +194,7 @@ def compute_tracking(df: pd.DataFrame) -> pd.DataFrame:
     })
 
     return result.sort_values(
-        by=["Attendance %", "Name", "Surname"],
+        by=["Attendance %", "Surname", "Name"],
         ascending=[False, True, True]
     ).reset_index(drop=True)
 
@@ -212,7 +213,7 @@ def parse_dob(dob_str: str):
     return None
 
 def get_birthdays_for_week(df: pd.DataFrame, today=None):
-    if "Date Of Birth" not in df.columns:
+    if df is None or df.empty or "Date Of Birth" not in df.columns:
         return []
     if today is None:
         today = now_local().date()
@@ -225,7 +226,6 @@ def get_birthdays_for_week(df: pd.DataFrame, today=None):
         dob = parse_dob(r.get("Date Of Birth", ""))
         if not dob:
             continue
-
         try:
             birthday_this_year = dob.replace(year=today.year)
         except ValueError:
@@ -244,7 +244,6 @@ def get_birthdays_for_week(df: pd.DataFrame, today=None):
             "Name": str(r.get("Name", "")),
             "Surname": str(r.get("Surname", "")),
             "Grade": str(r.get("Grade", "")),
-            "Barcode": str(r.get("Barcode", "")),
             "DOB": str(r.get("Date Of Birth", "")),
             "Kind": kind,
         })
@@ -267,14 +266,12 @@ def build_birthday_message(birthdays: list[dict]) -> str:
 # ------------------ WHATSAPP (META CLOUD API) ------------------
 
 def _normalize_e164(n: str) -> str:
-    """Expect E.164 like +2767xxxxxxx. Removes 'whatsapp:' if user passed Twilio-style."""
     n = str(n).strip()
     if n.startswith("whatsapp:"):
         n = n.replace("whatsapp:", "").strip()
     return n
 
 def send_whatsapp_message(to_numbers: list[str], body: str) -> tuple[bool, str]:
-    """Send WhatsApp messages using Meta WhatsApp Cloud API (test mode requires approved recipients)."""
     token = META_WA_TOKEN
     phone_number_id = META_WA_PHONE_NUMBER_ID
     api_version = META_WA_API_VERSION or "v22.0"
@@ -309,12 +306,7 @@ def send_whatsapp_message(to_numbers: list[str], body: str) -> tuple[bool, str]:
 
             if r.status_code in (200, 201):
                 sent_any = True
-                msg_id = ""
-                if isinstance(data, dict):
-                    msgs = data.get("messages", [])
-                    if msgs and isinstance(msgs, list) and isinstance(msgs[0], dict):
-                        msg_id = msgs[0].get("id", "")
-                results.append(f"{to_e164}: SENT (id {msg_id})" if msg_id else f"{to_e164}: SENT")
+                results.append(f"{to_e164}: SENT")
             else:
                 err = data.get("error", {}) if isinstance(data, dict) else {}
                 emsg = err.get("message", str(data))
@@ -326,7 +318,6 @@ def send_whatsapp_message(to_numbers: list[str], body: str) -> tuple[bool, str]:
 
     if sent_any:
         return True, " | ".join(results)
-
     return False, " | ".join(results) if results else "No recipients."
 
 
@@ -335,16 +326,7 @@ def send_whatsapp_message(to_numbers: list[str], body: str) -> tuple[bool, str]:
 def should_auto_send(now: datetime) -> bool:
     return (now.weekday() == SEND_DAY_WEEKDAY) and (now.time() >= SEND_AFTER_TIME)
 
-def load_wide_sheet(db_path: Path) -> pd.DataFrame:
-    return get_wide_sheet(db_path)
-
 def run_auto_send(db_path: Path):
-    """
-    Runs once per day:
-    - Saturday after 09:00
-    - Sends birthday message if birthdays exist
-    - Marks as sent to prevent repeats
-    """
     ensure_auto_send_table(db_path)
 
     now = now_local()
@@ -355,10 +337,9 @@ def run_auto_send(db_path: Path):
     if already_sent_today(db_path, date_str):
         return
 
-    df_now = load_wide_sheet(db_path)
+    df_now = get_wide_sheet(db_path)
     birthdays = get_birthdays_for_week(df_now)
 
-    # If no birthdays, still mark as sent to stop repeated checks that day
     if not birthdays:
         mark_sent_today(db_path, date_str, ts_iso)
         return
@@ -394,9 +375,8 @@ st.markdown(
 
 init_db(DB_PATH)
 restore_learners_if_db_empty(DB_PATH)
-seed_learners_from_csv_if_empty(DB_PATH)  # if you use a seed CSV in db.py
+seed_learners_from_csv_if_empty(DB_PATH)
 
-# Run auto-send safely (only triggers when schedule matches)
 try:
     run_auto_send(DB_PATH)
 except Exception as e:
@@ -424,6 +404,7 @@ st.markdown(
 
 st.write("")
 
+
 # ------------------ SIDEBAR: WHATSAPP TEST ------------------
 
 with st.sidebar.expander("📩 WhatsApp Connection Test (Meta)", expanded=False):
@@ -448,33 +429,307 @@ with st.sidebar.expander("📩 WhatsApp Connection Test (Meta)", expanded=False)
         else:
             st.error(info)
 
-# ------------------ TABS (PLACEHOLDER) ------------------
-# Keep your existing tab content below.
-# If you paste your current Scan/Today/Grades/History/Tracking/Manage sections,
-# I can merge them into this cleaned structure without breaking anything.
+
+# ------------------ DATA LOADER (small cache) ------------------
+
+@st.cache_data(ttl=2)
+def load_sheet_cached(db_path_str: str) -> pd.DataFrame:
+    return get_wide_sheet(Path(db_path_str))
+
+def load_sheet() -> pd.DataFrame:
+    return load_sheet_cached(str(DB_PATH))
+
+
+# ------------------ TABS ------------------
 
 tabs = st.tabs(["Scan", "Today", "Grades", "History", "Tracking", "Manage"])
 
+
+# ================== TAB 1: SCAN ==================
 with tabs[0]:
     st.subheader("Scan")
-    st.info("Paste your Scan tab code here (scanner -> insert_present_mark / in-out log).")
 
+    date_col, date_str, time_str, ts_iso = today_labels()
+
+    st.caption("Scan a barcode (or type) → mark Present + auto IN/OUT log.")
+
+    colA, colB = st.columns([2, 1])
+    with colA:
+        scanned = st.text_input("Barcode", placeholder="Scan or type barcode here…")
+    with colB:
+        mark_present = st.checkbox("Mark Present", value=True)
+
+    if st.button("Submit Scan", type="primary", use_container_width=True):
+        b = str(scanned).strip()
+        if not b:
+            st.warning("Please scan/type a barcode.")
+        else:
+            learner = get_learner_by_barcode(DB_PATH, b)
+            if not learner:
+                st.error("Barcode not found in learners list. Please add learner in Manage tab.")
+            else:
+                # Ensure today date exists
+                add_class_date(DB_PATH, date_col)
+
+                # Mark present (only saves if not already marked)
+                if mark_present:
+                    insert_present_mark(DB_PATH, date_col, date_str, time_str, learner["Barcode"])
+
+                # IN/OUT log auto toggle
+                next_action = determine_next_action(DB_PATH, learner["Barcode"], date_str)
+                append_inout_log(
+                    DB_PATH,
+                    ts_iso,
+                    date_str,
+                    time_str,
+                    learner["Barcode"],
+                    learner.get("Name", ""),
+                    learner.get("Surname", ""),
+                    next_action
+                )
+
+                st.success(
+                    f"✅ {learner.get('Name','')} {learner.get('Surname','')} "
+                    f"— {next_action} — Present={'Yes' if mark_present else 'No'}"
+                )
+                load_sheet_cached.clear()
+
+    st.divider()
+    st.subheader("Currently IN (Today)")
+    try:
+        df_in = get_currently_in(DB_PATH, date_str)
+        st.dataframe(df_in, use_container_width=True, hide_index=True)
+    except Exception as e:
+        st.warning(f"Unable to load currently IN list: {e}")
+
+
+# ================== TAB 2: TODAY ==================
 with tabs[1]:
     st.subheader("Today")
-    st.info("Paste your Today tab code here.")
 
+    df = load_sheet()
+    date_col = today_col_label()
+
+    if df.empty:
+        st.info("No learners found yet. Please add learners in Manage tab.")
+    else:
+        present, absent = get_present_absent(df, date_col)
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Total Learners", len(df))
+        c2.metric("Present Today", len(present))
+        c3.metric("Absent Today", len(absent))
+
+        st.divider()
+        st.subheader(f"Present — {date_col}")
+        st.dataframe(
+            present[["Name", "Surname", "Barcode", "Grade", "Area"]],
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.subheader(f"Absent — {date_col}")
+        st.dataframe(
+            absent[["Name", "Surname", "Barcode", "Grade", "Area"]],
+            use_container_width=True,
+            hide_index=True
+        )
+
+        st.divider()
+        st.subheader("Birthdays (This week ± 7 days)")
+        bdays = get_birthdays_for_week(df)
+        if not bdays:
+            st.info("No birthdays found in this period.")
+        else:
+            st.dataframe(pd.DataFrame(bdays), use_container_width=True, hide_index=True)
+
+
+# ================== TAB 3: GRADES ==================
 with tabs[2]:
     st.subheader("Grades")
-    st.info("Paste your Grades tab code here.")
 
+    df = load_sheet()
+    if df.empty:
+        st.info("No learners found yet.")
+    else:
+        date_cols = get_date_columns(df)
+        if not date_cols:
+            st.info("No attendance marks yet (no date columns). Scan learners first.")
+        else:
+            date_pick = st.selectbox("Select date column", options=date_cols[::-1])
+
+            grades = sorted([g for g in df["Grade"].astype(str).unique().tolist() if g.strip() != ""])
+            if not grades:
+                ❶
+            rows = []
+            for g in grades:
+                p, a = get_present_absent(df, date_pick, grade=g)
+                rows.append({"Grade": g, "Present": len(p), "Absent": len(a), "Total": len(p) + len(a)})
+
+            gdf = pd.DataFrame(rows).sort_values(by="Grade")
+            st.dataframe(gdf, use_container_width=True, hide_index=True)
+
+            st.divider()
+            st.subheader("Present by Grade (Chart)")
+            chart = alt.Chart(gdf).mark_bar().encode(
+                x="Grade:N",
+                y="Present:Q",
+                tooltip=["Grade", "Present", "Absent", "Total"]
+            )
+            st.altair_chart(chart, use_container_width=True)
+
+
+# ================== TAB 4: HISTORY ==================
 with tabs[3]:
     st.subheader("History")
-    st.info("Paste your History tab code here.")
 
+    df = load_sheet()
+    if df.empty:
+        st.info("No learners found yet.")
+    else:
+        date_cols = get_date_columns(df)
+        if not date_cols:
+            st.info("No attendance marks yet. Scan learners first.")
+        else:
+            date_pick = st.selectbox("Select date", options=date_cols[::-1])
+
+            grade_vals = sorted([x for x in df["Grade"].astype(str).unique().tolist() if x.strip() != ""])
+            area_vals = sorted([x for x in df["Area"].astype(str).unique().tolist() if x.strip() != ""])
+
+            grade_filter = st.selectbox("Filter Grade (optional)", options=["All"] + grade_vals)
+            area_filter = st.selectbox("Filter Area (optional)", options=["All"] + area_vals)
+
+            grade = None if grade_filter == "All" else grade_filter
+            area = None if area_filter == "All" else area_filter
+
+            present, absent = get_present_absent(df, date_pick, grade=grade, area=area)
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Total", len(present) + len(absent))
+            c2.metric("Present", len(present))
+            c3.metric("Absent", len(absent))
+
+            st.divider()
+            st.subheader("Present")
+            st.dataframe(
+                present[["Name", "Surname", "Barcode", "Grade", "Area"]],
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.subheader("Absent")
+            st.dataframe(
+                absent[["Name", "Surname", "Barcode", "Grade", "Area"]],
+                use_container_width=True,
+                hide_index=True
+            )
+
+            st.download_button(
+                "Download full sheet as CSV",
+                data=df.to_csv(index=False).encode("utf-8"),
+                file_name=f"attendance_sheet_{date_pick}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+
+# ================== TAB 5: TRACKING ==================
 with tabs[4]:
     st.subheader("Tracking")
-    st.info("Paste your Tracking tab code here.")
 
+    df = load_sheet()
+    if df.empty:
+        st.info("No learners found yet.")
+    else:
+        track = compute_tracking(df)
+
+        def meets70(x):
+            try:
+                return "✅" if float(x) >= 70 else "❌"
+            except Exception:
+                return "❌"
+
+        track["Meets 70%"] = track["Attendance %"].apply(meets70)
+
+        st.dataframe(
+            track[["Name", "Surname", "Grade", "Area", "Present", "Absent", "Attendance %", "Meets 70%", "Last present", "Barcode"]],
+            use_container_width=True,
+            hide_index=True
+        )
+
+
+# ================== TAB 6: MANAGE ==================
 with tabs[5]:
-    st.subheader("Manage")
-    st.info("Paste your Manage tab code here.")
+    st.subheader("Manage Learners")
+
+    df_learners = get_learners_df(DB_PATH)
+    st.caption("Edit learners directly, then click Save. You can also add/delete learners.")
+
+    edited = st.data_editor(
+        df_learners,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+        key="learners_editor"
+    )
+
+    col1, col2 = st.columns([1, 1])
+
+    with col1:
+        if st.button("💾 Save Changes", type="primary", use_container_width=True):
+            # Ensure required columns exist
+            for c in ["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]:
+                if c not in edited.columns:
+                    edited[c] = ""
+
+            edited["Barcode"] = edited["Barcode"].astype(str).str.strip()
+            edited = edited[edited["Barcode"] != ""].copy()
+
+            replace_learners_from_df(DB_PATH, edited)
+            save_learners_backup(edited)
+            load_sheet_cached.clear()
+            st.success("Saved ✅")
+
+    with col2:
+        del_code = st.text_input("Delete by Barcode", placeholder="Type barcode to delete…")
+        if st.button("🗑️ Delete Learner", use_container_width=True):
+            n = delete_learner_by_barcode(DB_PATH, del_code)
+            load_sheet_cached.clear()
+            st.success("Deleted ✅") if n else st.warning("No matching barcode found.")
+
+    st.divider()
+
+    st.subheader("Add One Learner")
+    a1, a2, a3 = st.columns(3)
+    with a1:
+        nb = st.text_input("New Barcode")
+        nn = st.text_input("Name")
+    with a2:
+        ns = st.text_input("Surname")
+        ng = st.text_input("Grade")
+    with a3:
+        na = st.text_input("Area")
+        nd = st.text_input("Date Of Birth")
+
+    if st.button("➕ Add Learner", use_container_width=True):
+        nb = str(nb).strip()
+        if not nb:
+            st.warning("Barcode is required.")
+        else:
+            current = get_learners_df(DB_PATH)
+            add_row = pd.DataFrame([{
+                "Barcode": nb,
+                "Name": nn,
+                "Surname": ns,
+                "Grade": ng,
+                "Area": na,
+                "Date Of Birth": nd
+            }])
+            combined = pd.concat([current, add_row], ignore_index=True).fillna("").astype(str)
+            combined["Barcode"] = combined["Barcode"].astype(str).str.strip()
+            combined = combined[combined["Barcode"] != ""].drop_duplicates(subset=["Barcode"]).reset_index(drop=True)
+
+            replace_learners_from_df(DB_PATH, combined)
+            save_learners_backup(combined)
+            load_sheet_cached.clear()
+            st.success("Added ✅")
