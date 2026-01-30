@@ -3,19 +3,154 @@
 import sqlite3
 from pathlib import Path
 import pandas as pd
+from typing import List, Optional
+
+
+# ================== AUTO SEND + RECIPIENTS TABLES ==================
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> List[str]:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return [r[1] for r in rows]  # col name is index 1
+
 
 def ensure_auto_send_table(db_path: Path):
+    """
+    Creates tables required for WhatsApp:
+    1) whatsapp_recipients: stores who should receive messages
+    2) auto_send_log: stores per-recipient-per-day send log using a unique key
+       key format: YYYY-MM-DD|+2783....
+    Also migrates older auto_send_log schema if found.
+    """
+    db_path = Path(db_path)
     con = sqlite3.connect(str(db_path))
     cur = con.cursor()
+
+    # --- recipients table ---
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS auto_send_log (
-            send_date TEXT PRIMARY KEY,
-            sent_at   TEXT
+        CREATE TABLE IF NOT EXISTS whatsapp_recipients (
+            phone TEXT PRIMARY KEY,     -- E.164 format e.g. +2783...
+            label TEXT,                 -- optional: "Thoko", "Cathy"
+            active INTEGER NOT NULL DEFAULT 1
         )
     """)
+
+    # --- auto_send_log table (new schema) ---
+    # New schema uses 'key' instead of 'send_date' so we can log per recipient.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS auto_send_log (
+            key TEXT PRIMARY KEY,       -- e.g. "2026-01-29|+27836280453"
+            sent_at TEXT
+        )
+    """)
+
+    # --- Migration: if old schema exists, try to migrate ---
+    # Old schema: (send_date TEXT PRIMARY KEY, sent_at TEXT)
+    # New schema: (key TEXT PRIMARY KEY, sent_at TEXT)
+    try:
+        cols = _table_columns(con, "auto_send_log")
+        if "send_date" in cols and "key" not in cols:
+            # Create new table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS auto_send_log_v2 (
+                    key TEXT PRIMARY KEY,
+                    sent_at TEXT
+                )
+            """)
+            # Migrate old daily log into new one with recipient "ALL"
+            # This preserves "already sent today" behavior if you used it.
+            cur.execute("""
+                INSERT OR IGNORE INTO auto_send_log_v2(key, sent_at)
+                SELECT send_date || '|ALL', sent_at
+                FROM auto_send_log
+            """)
+            # Swap tables
+            cur.execute("DROP TABLE auto_send_log")
+            cur.execute("ALTER TABLE auto_send_log_v2 RENAME TO auto_send_log")
+    except Exception:
+        # If anything fails, ignore migration and keep new tables.
+        pass
+
     con.commit()
     con.close()
 
+
+def add_whatsapp_recipient(db_path: Path, phone: str, label: str = "", active: int = 1):
+    phone = str(phone).strip()
+    if not phone:
+        return
+    con = sqlite3.connect(str(db_path))
+    cur = con.cursor()
+    cur.execute("""
+        INSERT INTO whatsapp_recipients(phone, label, active)
+        VALUES (?, ?, ?)
+        ON CONFLICT(phone) DO UPDATE SET
+            label=excluded.label,
+            active=excluded.active
+    """, (phone, label.strip(), int(active)))
+    con.commit()
+    con.close()
+
+
+def remove_whatsapp_recipient(db_path: Path, phone: str) -> int:
+    phone = str(phone).strip()
+    if not phone:
+        return 0
+    con = sqlite3.connect(str(db_path))
+    cur = con.cursor()
+    cur.execute("DELETE FROM whatsapp_recipients WHERE phone = ?", (phone,))
+    deleted = cur.rowcount
+    con.commit()
+    con.close()
+    return deleted
+
+
+def set_whatsapp_recipient_active(db_path: Path, phone: str, active: int) -> int:
+    phone = str(phone).strip()
+    if not phone:
+        return 0
+    con = sqlite3.connect(str(db_path))
+    cur = con.cursor()
+    cur.execute("UPDATE whatsapp_recipients SET active=? WHERE phone=?", (int(active), phone))
+    updated = cur.rowcount
+    con.commit()
+    con.close()
+    return updated
+
+
+def get_whatsapp_recipients(db_path: Path, only_active: bool = True) -> List[str]:
+    con = sqlite3.connect(str(db_path))
+    if only_active:
+        df = pd.read_sql("SELECT phone FROM whatsapp_recipients WHERE active=1 ORDER BY phone", con)
+    else:
+        df = pd.read_sql("SELECT phone FROM whatsapp_recipients ORDER BY phone", con)
+    con.close()
+    return [str(x).strip() for x in df["phone"].tolist() if str(x).strip()]
+
+
+def _send_key(date_str: str, phone: str) -> str:
+    return f"{date_str}|{phone}"
+
+
+def already_sent_today_for_recipient(db_path: Path, date_str: str, phone: str) -> bool:
+    key = _send_key(date_str, str(phone).strip())
+    con = sqlite3.connect(str(db_path))
+    cur = con.cursor()
+    cur.execute("SELECT 1 FROM auto_send_log WHERE key = ?", (key,))
+    row = cur.fetchone()
+    con.close()
+    return bool(row)
+
+
+def mark_sent_today_for_recipient(db_path: Path, date_str: str, phone: str, ts_iso: str):
+    key = _send_key(date_str, str(phone).strip())
+    con = sqlite3.connect(str(db_path))
+    cur = con.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO auto_send_log(key, sent_at) VALUES (?, ?)",
+        (key, ts_iso)
+    )
+    con.commit()
+    con.close()
 
 
 # ------------------ HELPERS ------------------
@@ -87,6 +222,9 @@ def init_db(db_path: Path):
 
     conn.commit()
     conn.close()
+
+    # Ensure WhatsApp tables exist too
+    ensure_auto_send_table(db_path)
 
 
 # ------------------ SEED / IMPORT FROM CSV ------------------
@@ -372,6 +510,3 @@ def get_currently_in(db_path: Path, date_str: str) -> pd.DataFrame:
     """, conn, params=(date_str,))
     conn.close()
     return df.fillna("").astype(str)
-
-
-
