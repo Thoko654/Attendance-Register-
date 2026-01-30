@@ -1,29 +1,43 @@
-# db.py — SQLite backend for Tutor Class Attendance Register
+# db.py — SQLite backend for Tutor Class Attendance Register (UPDATED + CLEAN)
+# ✅ Fixes:
+# - Removed duplicate ensure_auto_send_table()
+# - Adds whatsapp_recipients table
+# - Uses per-recipient send log (YYYY-MM-DD|+27...)
+# - Keeps backward compatibility for app.py that calls:
+#   already_sent_today(db_path, date_str) and mark_sent_today(db_path, date_str, ts_iso)
+# - Keeps your existing attendance / learners / inout features
 
 import sqlite3
 from pathlib import Path
+from typing import List
 import pandas as pd
-from typing import List, Optional
 
 
-# ================== AUTO SEND + RECIPIENTS TABLES ==================
+# ================== HELPERS ==================
+
+def norm_barcode(code: str) -> str:
+    s = str(code).strip()
+    s = s.lstrip("0")
+    return s if s != "" else "0"
+
+
+def get_conn(db_path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON;")
+    return conn
+
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> List[str]:
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return [r[1] for r in rows]  # col name is index 1
+    return [r[1] for r in rows]  # column name is index 1
 
-def ensure_auto_send_table(db_path: Path):
-    con = sqlite3.connect(str(db_path), check_same_thread=False)
-    cur = con.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS auto_send_log (
-            send_date TEXT PRIMARY KEY,
-            sent_at   TEXT
-        )
-    """)
-    con.commit()
-    con.close()
 
+def _send_key(date_str: str, phone: str) -> str:
+    return f"{date_str}|{phone}"
+
+
+# ================== WHATSAPP TABLES (RECIPIENTS + LOG) ==================
 
 def ensure_auto_send_table(db_path: Path):
     """
@@ -31,56 +45,69 @@ def ensure_auto_send_table(db_path: Path):
     1) whatsapp_recipients: stores who should receive messages
     2) auto_send_log: stores per-recipient-per-day send log using a unique key
        key format: YYYY-MM-DD|+2783....
-    Also migrates older auto_send_log schema if found.
+    Also attempts to migrate older schema if it existed.
     """
     db_path = Path(db_path)
     con = sqlite3.connect(str(db_path))
     cur = con.cursor()
 
-    # --- recipients table ---
+    # Recipients
     cur.execute("""
         CREATE TABLE IF NOT EXISTS whatsapp_recipients (
             phone TEXT PRIMARY KEY,     -- E.164 format e.g. +2783...
-            label TEXT,                 -- optional: "Thoko", "Cathy"
+            label TEXT,                 -- optional
             active INTEGER NOT NULL DEFAULT 1
         )
     """)
 
-    # --- auto_send_log table (new schema) ---
-    # New schema uses 'key' instead of 'send_date' so we can log per recipient.
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS auto_send_log (
-            key TEXT PRIMARY KEY,       -- e.g. "2026-01-29|+27836280453"
-            sent_at TEXT
-        )
-    """)
-
-    # --- Migration: if old schema exists, try to migrate ---
+    # Try to detect old auto_send_log schema safely
     # Old schema: (send_date TEXT PRIMARY KEY, sent_at TEXT)
     # New schema: (key TEXT PRIMARY KEY, sent_at TEXT)
     try:
-        cols = _table_columns(con, "auto_send_log")
-        if "send_date" in cols and "key" not in cols:
-            # Create new table
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='auto_send_log'")
+        exists = cur.fetchone() is not None
+
+        if not exists:
+            # Create new schema directly
             cur.execute("""
-                CREATE TABLE IF NOT EXISTS auto_send_log_v2 (
-                    key TEXT PRIMARY KEY,
+                CREATE TABLE IF NOT EXISTS auto_send_log (
+                    key TEXT PRIMARY KEY,     -- e.g. "2026-01-29|+2783..." OR "2026-01-29|ALL"
                     sent_at TEXT
                 )
             """)
-            # Migrate old daily log into new one with recipient "ALL"
-            # This preserves "already sent today" behavior if you used it.
-            cur.execute("""
-                INSERT OR IGNORE INTO auto_send_log_v2(key, sent_at)
-                SELECT send_date || '|ALL', sent_at
-                FROM auto_send_log
-            """)
-            # Swap tables
-            cur.execute("DROP TABLE auto_send_log")
-            cur.execute("ALTER TABLE auto_send_log_v2 RENAME TO auto_send_log")
+        else:
+            # Table exists -> inspect columns
+            cols = _table_columns(con, "auto_send_log")
+            if "key" not in cols:
+                # It's likely the old schema (send_date)
+                # Create v2 table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS auto_send_log_v2 (
+                        key TEXT PRIMARY KEY,
+                        sent_at TEXT
+                    )
+                """)
+                if "send_date" in cols:
+                    # migrate old daily log into new one with "ALL"
+                    cur.execute("""
+                        INSERT OR IGNORE INTO auto_send_log_v2(key, sent_at)
+                        SELECT send_date || '|ALL', sent_at
+                        FROM auto_send_log
+                    """)
+                # swap
+                cur.execute("DROP TABLE auto_send_log")
+                cur.execute("ALTER TABLE auto_send_log_v2 RENAME TO auto_send_log")
+
+            # If it already has 'key', we are good.
+            # If it has other unexpected columns, we leave it as-is.
     except Exception:
-        # If anything fails, ignore migration and keep new tables.
-        pass
+        # If anything fails, ensure table exists with the new schema (best effort)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS auto_send_log (
+                key TEXT PRIMARY KEY,
+                sent_at TEXT
+            )
+        """)
 
     con.commit()
     con.close()
@@ -139,10 +166,6 @@ def get_whatsapp_recipients(db_path: Path, only_active: bool = True) -> List[str
     return [str(x).strip() for x in df["phone"].tolist() if str(x).strip()]
 
 
-def _send_key(date_str: str, phone: str) -> str:
-    return f"{date_str}|{phone}"
-
-
 def already_sent_today_for_recipient(db_path: Path, date_str: str, phone: str) -> bool:
     key = _send_key(date_str, str(phone).strip())
     con = sqlite3.connect(str(db_path))
@@ -165,27 +188,38 @@ def mark_sent_today_for_recipient(db_path: Path, date_str: str, phone: str, ts_i
     con.close()
 
 
-# ------------------ HELPERS ------------------
-def norm_barcode(code: str) -> str:
-    s = str(code).strip()
-    # remove leading zeros so 0001 == 1
-    s = s.lstrip("0")
-    return s if s != "" else "0"
+# ✅ Backwards-compatible helpers (used by your app.py)
+# These treat "sent today" as a single global event (key = YYYY-MM-DD|ALL)
+
+def already_sent_today(db_path: Path, date_str: str) -> bool:
+    key = _send_key(date_str, "ALL")
+    con = sqlite3.connect(str(db_path))
+    cur = con.cursor()
+    cur.execute("SELECT 1 FROM auto_send_log WHERE key = ?", (key,))
+    row = cur.fetchone()
+    con.close()
+    return bool(row)
 
 
-def get_conn(db_path: Path):
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
-    return conn
+def mark_sent_today(db_path: Path, date_str: str, ts_iso: str):
+    key = _send_key(date_str, "ALL")
+    con = sqlite3.connect(str(db_path))
+    cur = con.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO auto_send_log(key, sent_at) VALUES (?, ?)",
+        (key, ts_iso)
+    )
+    con.commit()
+    con.close()
 
 
-# ------------------ DB INIT ------------------
+# ================== DB INIT ==================
+
 def init_db(db_path: Path):
     conn = get_conn(db_path)
     cur = conn.cursor()
 
-    # learners = your main registry
+    # learners registry
     cur.execute("""
     CREATE TABLE IF NOT EXISTS learners (
         barcode TEXT PRIMARY KEY,
@@ -198,27 +232,27 @@ def init_db(db_path: Path):
     )
     """)
 
-    # dates = optional list of class dates (so you can add future Saturdays)
+    # list of class dates (optional)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS class_dates (
         date_label TEXT PRIMARY KEY
     )
     """)
 
-    # attendance marks (Present/Absent). We store only present marks.
+    # attendance marks (store only present)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS attendance_marks (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        date_label TEXT NOT NULL,   -- e.g. 22-Jan
-        date_str   TEXT NOT NULL,   -- e.g. 2026-01-22
-        time_str   TEXT NOT NULL,   -- e.g. 09:30:10
+        date_label TEXT NOT NULL,
+        date_str   TEXT NOT NULL,
+        time_str   TEXT NOT NULL,
         barcode    TEXT NOT NULL,
         present    INTEGER NOT NULL DEFAULT 1,
         FOREIGN KEY(barcode) REFERENCES learners(barcode) ON DELETE CASCADE
     )
     """)
 
-    # IN/OUT log (same as your attendance_log.csv but in DB)
+    # in/out log
     cur.execute("""
     CREATE TABLE IF NOT EXISTS inout_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,24 +269,22 @@ def init_db(db_path: Path):
     conn.commit()
     conn.close()
 
-    # Ensure WhatsApp tables exist too
+    # ensure WhatsApp tables exist too
     ensure_auto_send_table(db_path)
 
 
-# ------------------ SEED / IMPORT FROM CSV ------------------
+# ================== SEED / IMPORT ==================
+
 def seed_learners_from_csv_if_empty(db_path: Path, csv_path: str = "attendance_clean.csv") -> int:
     """
     If learners table is empty, import learners from a CSV file.
-    Returns number of imported rows.
-    Safe: will NOT overwrite learners if DB already has learners.
+    Returns number of imported rows. Safe: won't overwrite if DB already has learners.
     """
-    # if DB already has learners, do nothing
     try:
         existing = get_learners_df(db_path)
         if existing is not None and len(existing) > 0:
             return 0
     except Exception:
-        # if query fails for some reason, don't seed
         return 0
 
     p = Path(csv_path)
@@ -261,16 +293,12 @@ def seed_learners_from_csv_if_empty(db_path: Path, csv_path: str = "attendance_c
 
     df = pd.read_csv(p, dtype=str).fillna("")
 
-    # Your CSV has: Barcode, Name, Surname, Grade, Area, Date Of Birth
-    # It may also have extra columns - ignore them safely.
     needed = ["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]
     for c in needed:
         if c not in df.columns:
             df[c] = ""
 
     learners_df = df[needed].copy()
-
-    # Clean barcode + drop blanks + deduplicate
     learners_df["Barcode"] = learners_df["Barcode"].astype(str).str.strip()
     learners_df = learners_df[learners_df["Barcode"] != ""]
     learners_df = learners_df.drop_duplicates(subset=["Barcode"]).reset_index(drop=True)
@@ -279,7 +307,8 @@ def seed_learners_from_csv_if_empty(db_path: Path, csv_path: str = "attendance_c
     return len(learners_df)
 
 
-# ------------------ LEARNERS CRUD ------------------
+# ================== LEARNERS CRUD ==================
+
 def upsert_learner(db_path: Path, row: dict):
     conn = get_conn(db_path)
     cur = conn.cursor()
@@ -316,7 +345,6 @@ def upsert_learner(db_path: Path, row: dict):
 
 
 def replace_learners_from_df(db_path: Path, df: pd.DataFrame):
-    # Replace learners table from a dataframe (used by Manage → Save changes)
     conn = get_conn(db_path)
     cur = conn.cursor()
 
@@ -358,7 +386,8 @@ def delete_learner_by_barcode(db_path: Path, barcode: str) -> int:
     return deleted
 
 
-# ------------------ DATES ------------------
+# ================== DATES ==================
+
 def add_class_date(db_path: Path, date_label: str):
     conn = get_conn(db_path)
     cur = conn.cursor()
@@ -374,7 +403,8 @@ def get_all_class_dates(db_path: Path) -> list[str]:
     return [str(x).strip() for x in df["date_label"].tolist() if str(x).strip()]
 
 
-# ------------------ DATAFRAMES ------------------
+# ================== DATAFRAMES ==================
+
 def get_learners_df(db_path: Path) -> pd.DataFrame:
     conn = get_conn(db_path)
     df = pd.read_sql("""
@@ -407,12 +437,10 @@ def get_wide_sheet(db_path: Path) -> pd.DataFrame:
     """, conn)
     conn.close()
 
-    # include all dates (future dates too)
     all_dates = set(get_all_class_dates(db_path))
     if not marks.empty:
         all_dates |= set(marks["date_label"].astype(str).tolist())
 
-    # pivot present marks
     if marks.empty:
         wide = learners.copy()
     else:
@@ -429,24 +457,22 @@ def get_wide_sheet(db_path: Path) -> pd.DataFrame:
         pv.rename(columns={"barcode": "Barcode"}, inplace=True)
         wide = learners.merge(pv, on="Barcode", how="left")
 
-    # ensure date columns exist in df even if empty
+    # ensure all date columns exist
     for d in sorted(all_dates, key=str):
         if d not in wide.columns:
             wide[d] = ""
 
-    wide = wide.fillna("").astype(str)
-    return wide
+    return wide.fillna("").astype(str)
 
 
-# ------------------ ATTENDANCE + LOGS ------------------
+# ================== ATTENDANCE + LOGS ==================
+
 def insert_present_mark(db_path: Path, date_label: str, date_str: str, time_str: str, barcode: str):
     conn = get_conn(db_path)
     cur = conn.cursor()
 
-    # store the date label as a known class date
     cur.execute("INSERT OR IGNORE INTO class_dates(date_label) VALUES (?)", (date_label,))
 
-    # avoid duplicate present mark for same learner + date
     cur.execute("""
         SELECT 1 FROM attendance_marks
         WHERE date_label=? AND barcode=? AND present=1
@@ -464,7 +490,8 @@ def insert_present_mark(db_path: Path, date_label: str, date_str: str, time_str:
     conn.close()
 
 
-def append_inout_log(db_path: Path, ts_iso: str, date_str: str, time_str: str, barcode: str, name: str, surname: str, action: str):
+def append_inout_log(db_path: Path, ts_iso: str, date_str: str, time_str: str,
+                    barcode: str, name: str, surname: str, action: str):
     conn = get_conn(db_path)
     cur = conn.cursor()
     cur.execute("""
@@ -522,4 +549,3 @@ def get_currently_in(db_path: Path, date_str: str) -> pd.DataFrame:
     """, conn, params=(date_str,))
     conn.close()
     return df.fillna("").astype(str)
-
