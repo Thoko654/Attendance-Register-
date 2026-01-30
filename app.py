@@ -15,9 +15,9 @@ import altair as alt
 from db import (
     init_db,
     ensure_auto_send_table,# ✅ add this
+    get_wide_sheet,
     already_sent_today,
     mark_sent_today,
-    get_wide_sheet,
     get_learners_df,
     replace_learners_from_df,
     delete_learner_by_barcode,
@@ -1186,6 +1186,7 @@ if st.button("Send Test WhatsApp", use_container_width=True):
         st.error(info)
 
 st.markdown("</div>", unsafe_allow_html=True)
+
 
 
 
