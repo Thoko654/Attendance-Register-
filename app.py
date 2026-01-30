@@ -559,8 +559,8 @@ with tabs[2]:
             date_pick = st.selectbox("Select date column", options=date_cols[::-1])
 
             grades = sorted([g for g in df["Grade"].astype(str).unique().tolist() if g.strip() != ""])
-                if not grades:
-            rows = []
+            if not grades:
+                rows = []
             for g in grades:
                 p, a = get_present_absent(df, date_pick, grade=g)
                 rows.append({"Grade": g, "Present": len(p), "Absent": len(a), "Total": len(p) + len(a)})
@@ -732,5 +732,6 @@ with tabs[5]:
             save_learners_backup(combined)
             load_sheet_cached.clear()
             st.success("Added ✅")
+
 
 
