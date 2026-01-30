@@ -560,7 +560,6 @@ with tabs[2]:
 
             grades = sorted([g for g in df["Grade"].astype(str).unique().tolist() if g.strip() != ""])
             if not grades:
-                ❶
             rows = []
             for g in grades:
                 p, a = get_present_absent(df, date_pick, grade=g)
@@ -733,3 +732,4 @@ with tabs[5]:
             save_learners_backup(combined)
             load_sheet_cached.clear()
             st.success("Added ✅")
+
