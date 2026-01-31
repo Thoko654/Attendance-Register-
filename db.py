@@ -212,6 +212,24 @@ def ensure_auto_send_table(db_path: Path):
     """)
     con.commit()
     con.close()
+def already_sent_today(db_path: Path, date_str: str) -> bool:
+    con = _connect(db_path)
+    cur = con.cursor()
+    cur.execute("SELECT 1 FROM auto_send_log WHERE send_date = ?", (date_str,))
+    row = cur.fetchone()
+    con.close()
+    return bool(row)
+
+def mark_sent_today(db_path: Path, date_str: str, ts_iso: str):
+    con = _connect(db_path)
+    cur = con.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO auto_send_log(send_date, sent_at) VALUES (?, ?)",
+        (date_str, ts_iso),
+    )
+    con.commit()
+    con.close()
+
 
 # ------------------ CSV SEED ------------------
 
@@ -237,3 +255,4 @@ def seed_learners_from_csv_if_empty(db_path: Path, csv_path: str):
 
     csv_df = csv_df[["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]]
     replace_learners_from_df(db_path, csv_df)
+
