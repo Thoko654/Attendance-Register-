@@ -8,7 +8,6 @@ from zoneinfo import ZoneInfo
 
 import streamlit as st
 import pandas as pd
-import altair as alt
 import requests
 
 from db import (
@@ -24,9 +23,9 @@ from db import (
     get_currently_in,
     norm_barcode,
     seed_learners_from_csv_if_empty,
-    ensure_auto_send_table,   # ✅ MUST exist in db.py
-    already_sent_today,       # ✅ MUST exist in db.py
-    mark_sent_today,          # ✅ MUST exist in db.py
+    ensure_auto_send_table,
+    already_sent_today,
+    mark_sent_today,
 )
 
 # ------------------ CONFIG ------------------
@@ -230,6 +229,7 @@ def build_grades_export(df: pd.DataFrame, date_sel: str, grades: list[str], grad
         absent_vs_cap = max(0, grade_capacity - int(present))
 
         summary_rows.append({
+            "Section": "SUMMARY",
             "Date": date_sel,
             "Grade": g,
             "Capacity (fixed)": int(grade_capacity),
@@ -241,15 +241,61 @@ def build_grades_export(df: pd.DataFrame, date_sel: str, grades: list[str], grad
     summary_df = pd.DataFrame(summary_rows)
 
     learners = df.copy()
+    learners["Section"] = "LEARNERS"
     learners["Date"] = date_sel
+
     if date_sel in learners.columns:
         learners["Status"] = learners[date_sel].astype(str).apply(lambda x: "Present" if x.strip() == "1" else "Absent")
     else:
         learners["Status"] = "Absent"
 
-    learners_export = learners[["Date","Grade","Name","Surname","Barcode","Status"]].copy()
+    learners_export = learners[["Section","Date","Grade","Name","Surname","Barcode","Status"]].copy()
+
     combined_export_df = pd.concat([summary_df, learners_export], ignore_index=True)
-    return summary_df, combined_export_df
+    return summary_df.drop(columns=["Section"]), combined_export_df
+
+# ------------------ TRACKING ------------------
+
+def compute_tracking(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+
+    date_cols = get_date_columns(df)
+    sessions = len(date_cols)
+
+    base_cols = ["Name", "Surname", "Barcode", "Grade", "Area"]
+    for c in base_cols:
+        if c not in df.columns:
+            df[c] = ""
+
+    rows = []
+    for _, r in df.iterrows():
+        present = 0
+        last_present = ""
+
+        for d in date_cols:
+            if str(r.get(d, "")).strip() == "1":
+                present += 1
+                last_present = d
+
+        absent = sessions - present
+        pct = (present / sessions * 100) if sessions else 0.0
+
+        rows.append({
+            "Name": str(r.get("Name", "")).strip(),
+            "Surname": str(r.get("Surname", "")).strip(),
+            "Barcode": str(r.get("Barcode", "")).strip(),
+            "Grade": str(r.get("Grade", "")).strip(),
+            "Area": str(r.get("Area", "")).strip(),
+            "Sessions": sessions,
+            "Present": present,
+            "Absent": absent,
+            "Attendance %": round(pct, 1),
+            "Last present": last_present,
+        })
+
+    out = pd.DataFrame(rows)
+    return out.sort_values(["Grade", "Surname", "Name"], na_position="last")
 
 # ------------------ DB LOAD ------------------
 
@@ -271,7 +317,7 @@ button[data-baseweb="tab"] { font-size: 16px !important; padding-top: 10px !impo
 </style>
 """, unsafe_allow_html=True)
 
-# ------------------ HEADER (CENTERED) ------------------
+# ------------------ HEADER ------------------
 
 logo_b64 = ""
 if Path("tzu_chi_logo.png").exists():
@@ -300,7 +346,6 @@ with st.sidebar:
     init_db(db_path)
     ensure_auto_send_table(db_path)
 
-    # Seed from CSV if empty
     try:
         seed_learners_from_csv_if_empty(db_path, "attendance_clean.csv")
     except Exception as e:
@@ -319,7 +364,7 @@ try:
     _, date_str, _, ts_iso = today_labels()
 
     if (not already_sent_today(db_path, date_str)) and should_auto_send(now):
-        df_now = load_wide_sheet(db_path)
+        df_now = get_learners_df(db_path).fillna("").astype(str)  # ✅ learners only
         birthdays = get_birthdays_for_week(df_now)
 
         if birthdays:
@@ -420,7 +465,6 @@ with tabs[0]:
 
         st.session_state["scan_box"] = ""
 
-    # ✅ Auto-submit on scan (no button)
     st.text_input("Scan barcode", key="scan_box", on_change=handle_scan, placeholder="Focus here and scan…")
 
     fb = st.session_state.pop("scan_feedback", None)
@@ -443,12 +487,9 @@ with tabs[1]:
     today_col, _, _, _ = today_labels()
     st.subheader(f"Today's Attendance — {today_col}")
 
-    add_class_date(db_path, today_col)
-    df = load_wide_sheet(db_path)
-    if today_col not in df.columns:
-        df[today_col] = ""
+    df_learners = get_learners_df(db_path).fillna("").astype(str)  # ✅ learners source
+    birthdays = get_birthdays_for_week(df_learners)
 
-    birthdays = get_birthdays_for_week(df)
     if birthdays:
         st.markdown("### 🎂 Birthdays around this week")
         for b in birthdays:
@@ -464,7 +505,6 @@ with tabs[1]:
 
 # ------------------ GRADES TAB ------------------
 
-# ------------------ Grades Tab ------------------
 with tabs[2]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Grade Attendance by Saturday")
@@ -516,7 +556,6 @@ with tabs[2]:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-
 # ------------------ HISTORY TAB ------------------
 
 with tabs[3]:
@@ -545,7 +584,6 @@ with tabs[3]:
 
 # ------------------ TRACKING TAB ------------------
 
-# ------------------ Tracking Tab ------------------
 with tabs[4]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Tracking (per learner)")
@@ -594,7 +632,6 @@ with tabs[4]:
 
         if not metrics.empty:
             show_cols = ["Name","Surname","Barcode","Grade","Area","Sessions","Present","Absent","Attendance %","Last present"]
-            show_cols = [c for c in show_cols if c in metrics.columns]
             st.dataframe(metrics[show_cols], use_container_width=True, height=420)
 
             st.download_button(
@@ -608,7 +645,6 @@ with tabs[4]:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-
 # ------------------ MANAGE TAB ------------------
 
 with tabs[5]:
@@ -619,7 +655,87 @@ with tabs[5]:
     if "Date Of Birth" not in df.columns:
         df["Date Of Birth"] = ""
 
-    st.dataframe(df, use_container_width=True)
+    st.markdown("### ✅ Current learners")
+    st.dataframe(df, use_container_width=True, height=320)
+
+    st.divider()
+    st.markdown("### ➕ Add a new learner")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        new_name = st.text_input("Name", key="new_name")
+        new_surname = st.text_input("Surname", key="new_surname")
+    with c2:
+        new_barcode = st.text_input("Barcode", key="new_barcode")
+        new_grade = st.text_input("Grade", key="new_grade")
+    with c3:
+        new_area = st.text_input("Area", key="new_area")
+        new_dob = st.text_input("Date Of Birth (e.g. 31-Jan-13)", key="new_dob")
+
+    if st.button("Add learner", use_container_width=True):
+        if not new_barcode.strip():
+            st.error("Barcode is required.")
+        else:
+            df2 = df.copy()
+            df2.loc[len(df2)] = {
+                "Barcode": new_barcode.strip(),
+                "Name": new_name.strip(),
+                "Surname": new_surname.strip(),
+                "Grade": new_grade.strip(),
+                "Area": new_area.strip(),
+                "Date Of Birth": new_dob.strip(),
+            }
+            replace_learners_from_df(db_path, df2)
+            st.success("✅ Learner added. Refreshing…")
+            st.rerun()
+
+    st.divider()
+    st.markdown("### 🗑 Delete learner by barcode")
+    del_code = st.text_input("Barcode to delete", key="del_code")
+    if st.button("Delete learner", use_container_width=True):
+        if not del_code.strip():
+            st.error("Enter a barcode.")
+        else:
+            n = delete_learner_by_barcode(db_path, del_code.strip())
+            if n:
+                st.success(f"✅ Deleted {n} learner(s). Refreshing…")
+                st.rerun()
+            else:
+                st.warning("Barcode not found.")
+
+    st.divider()
+    st.markdown("### 📤 Import / Replace learners from CSV (attendance_clean.csv format)")
+    st.caption("Upload CSV with columns: Name, Surname, Barcode, Grade, Area, Date Of Birth")
+    up = st.file_uploader("Upload CSV", type=["csv"], key="csv_up")
+    if up is not None:
+        try:
+            imp = pd.read_csv(up).fillna("").astype(str)
+            imp.columns = [c.strip() for c in imp.columns]
+            required = ["Name", "Surname", "Barcode"]
+            if not all(c in imp.columns for c in required):
+                st.error("CSV missing required columns: Name, Surname, Barcode")
+            else:
+                for c in ["Grade", "Area", "Date Of Birth"]:
+                    if c not in imp.columns:
+                        imp[c] = ""
+                imp = imp[["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]]
+                st.dataframe(imp.head(20), use_container_width=True)
+                if st.button("REPLACE database learners with this CSV", type="primary", use_container_width=True):
+                    replace_learners_from_df(db_path, imp)
+                    st.success("✅ Imported successfully. Refreshing…")
+                    st.rerun()
+        except Exception as e:
+            st.error(f"Import failed: {e}")
+
+    st.divider()
+    st.markdown("### 💬 WhatsApp Test (manual send)")
+    test_msg = st.text_area("Message", value="Test message from Tutor Class Attendance Register ✅", height=100)
+    test_to = st.text_input("Send to (single number in +27... format)", value=WHATSAPP_RECIPIENTS[0] if WHATSAPP_RECIPIENTS else "")
+
+    if st.button("Send WhatsApp test now", use_container_width=True):
+        ok, info = send_whatsapp_message([test_to], test_msg)
+        if ok:
+            st.success(f"✅ Sent. {info}")
+        else:
+            st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
-
