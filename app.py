@@ -464,6 +464,7 @@ with tabs[1]:
 
 # ------------------ GRADES TAB ------------------
 
+# ------------------ Grades Tab ------------------
 with tabs[2]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Grade Attendance by Saturday")
@@ -472,32 +473,49 @@ with tabs[2]:
     date_cols = get_date_columns(df)
 
     if not date_cols:
-        st.info("No attendance dates yet.")
+        st.info("No attendance dates yet. Scan at least 1 learner to create the first class date.")
     else:
-        date_sel = st.selectbox("Choose a Saturday", list(reversed(date_cols)))
+        date_sel = st.selectbox("Choose a Saturday", list(reversed(date_cols)), key="grade_date")
         grades = ["5", "6", "7", "8"]
 
-        summary_df, combined_export_df = build_grades_export(df, date_sel, grades, int(grade_capacity))
+        summary_df, combined_export_df = build_grades_export(
+            df=df,
+            date_sel=date_sel,
+            grades=grades,
+            grade_capacity=int(grade_capacity)
+        )
 
-        cols = st.columns(len(grades))
+        # KPI cards
+        k_cols = st.columns(len(grades))
         for i, g in enumerate(grades):
             row = summary_df[summary_df["Grade"].astype(str) == g].iloc[0]
-            cols[i].markdown(
-                f'<div class="stat-card"><b>Grade {g}</b><div class="kpi">{row["Attendance %"]:.1f}%</div>'
-                f'<div style="font-size:12px;color:#555;">Present: {int(row["Present"])} / {int(grade_capacity)}</div></div>',
-                unsafe_allow_html=True
-            )
+            pct_str = f"{float(row['Attendance %']):.1f}%"
+            with k_cols[i]:
+                st.markdown(
+                    f'<div class="stat-card"><b>Grade {g}</b>'
+                    f'<div class="kpi">{pct_str}</div>'
+                    f'<div style="font-size:12px;color:#555;">Present: {int(row["Present"])} / {int(grade_capacity)}</div></div>',
+                    unsafe_allow_html=True,
+                )
 
-        st.dataframe(summary_df, use_container_width=True)
+        st.markdown(f"**Summary for {date_sel}**")
+        st.dataframe(summary_df, use_container_width=True, height=220)
+
+        learners_view = combined_export_df[combined_export_df["Section"] == "LEARNERS"][["Date","Grade","Name","Surname","Barcode","Status"]]
+        st.markdown(f"**Learner list for {date_sel} (all grades)**")
+        st.dataframe(learners_view, use_container_width=True, height=360)
+
         st.download_button(
-            "Download Grade Report (Summary + Learners)",
+            "Download FULL grade report (Summary + Learners) — ONE CSV",
             data=combined_export_df.to_csv(index=False).encode("utf-8"),
             file_name=f"grade_report_{date_sel}.csv",
             mime="text/csv",
             use_container_width=True,
+            key="grades_dl_full"
         )
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 # ------------------ HISTORY TAB ------------------
 
@@ -527,6 +545,7 @@ with tabs[3]:
 
 # ------------------ TRACKING TAB ------------------
 
+# ------------------ Tracking Tab ------------------
 with tabs[4]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Tracking (per learner)")
@@ -535,12 +554,60 @@ with tabs[4]:
     date_cols = get_date_columns(df)
 
     if not date_cols:
-        st.info("No attendance dates yet.")
+        st.info("No attendance dates yet. Scan at least 1 learner on a Saturday.")
     else:
-        # Keep your old tracking logic here (you already have it)
-        st.info("Tracking table is ready — paste your compute_tracking() section here if you want it shown.")
+        fc1, fc2, fc3 = st.columns(3)
+        with fc1:
+            grade_sel = st.selectbox(
+                "Filter by Grade",
+                unique_sorted(df["Grade"]) if "Grade" in df.columns else ["(All)"],
+                key="track_grade"
+            )
+        with fc2:
+            area_sel = st.selectbox(
+                "Filter by Area",
+                unique_sorted(df["Area"]) if "Area" in df.columns else ["(All)"],
+                key="track_area"
+            )
+        with fc3:
+            search = st.text_input("Search name/barcode", key="track_search")
+
+        subset = df.copy()
+
+        if grade_sel != "(All)" and "Grade" in subset.columns:
+            subset = subset[subset["Grade"].astype(str) == str(grade_sel)]
+        if area_sel != "(All)" and "Area" in subset.columns:
+            subset = subset[subset["Area"].astype(str) == str(area_sel)]
+
+        if search.strip():
+            q = search.strip().lower()
+            subset = subset[subset.apply(
+                lambda r: q in str(r.get("Name", "")).lower()
+                or q in str(r.get("Surname", "")).lower()
+                or q in str(r.get("Barcode", "")).lower(),
+                axis=1
+            )]
+
+        metrics = compute_tracking(subset) if len(subset) else pd.DataFrame()
+
+        st.write(f"Total learners: **{len(metrics)}**  |  Sessions counted: **{len(date_cols)}**")
+
+        if not metrics.empty:
+            show_cols = ["Name","Surname","Barcode","Grade","Area","Sessions","Present","Absent","Attendance %","Last present"]
+            show_cols = [c for c in show_cols if c in metrics.columns]
+            st.dataframe(metrics[show_cols], use_container_width=True, height=420)
+
+            st.download_button(
+                "Download tracking report (CSV)",
+                data=metrics[show_cols].to_csv(index=False).encode("utf-8"),
+                file_name="attendance_tracking_report.csv",
+                mime="text/csv",
+                use_container_width=True,
+                key="track_dl"
+            )
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 # ------------------ MANAGE TAB ------------------
 
@@ -555,3 +622,4 @@ with tabs[5]:
     st.dataframe(df, use_container_width=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
+
