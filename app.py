@@ -436,10 +436,10 @@ try:
     if (not already_sent_today(db_path, date_str)) and should_auto_send(now):
        df_learners = get_learners_df(db_path).fillna("").astype(str)
 
-if not df_learners.empty:
-    birthdays = get_birthdays_for_week(df_learners)
-else:
-    birthdays = []
+    if not df_learners.empty:
+        birthdays = get_birthdays_for_week(df_learners)
+    else:
+        birthdays = []
 
 
         if birthdays:
@@ -866,6 +866,7 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
