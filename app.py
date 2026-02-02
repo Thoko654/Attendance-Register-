@@ -34,6 +34,11 @@ APP_TZ = os.environ.get("APP_TIMEZONE", "Africa/Johannesburg")
 TZ = ZoneInfo(APP_TZ)
 
 DB_DEFAULT = os.environ.get("DB_DEFAULT", "app_v2.db")
+# ------------------ DB PATH STATE ------------------
+
+if "db_path_str" not in st.session_state:
+    st.session_state.db_path_str = DB_DEFAULT
+
 
 WHATSAPP_RECIPIENTS = [
     "+27836280453",
@@ -337,36 +342,76 @@ st.markdown(f"""
 
 # ------------------ SIDEBAR ------------------
 
+import sqlite3
+
+# ✅ Keep DB path persistent (so refresh does NOT reset to app.db)
+if "db_path_str" not in st.session_state:
+    st.session_state["db_path_str"] = DB_DEFAULT  # only set once
+
 with st.sidebar:
     st.header("Settings")
 
-    db_path_str = st.text_input("Database file path", DB_DEFAULT)
-    db_path = Path(db_path_str).expanduser()
+    # ✅ Use session_state value (persistent)
+    db_path_str = st.text_input(
+        "Database file path",
+        value=st.session_state["db_path_str"],
+        key="db_path_input"
+    ).strip()
 
+    # ✅ If user changed it, save + rerun immediately
+    if db_path_str and db_path_str != st.session_state["db_path_str"]:
+        st.session_state["db_path_str"] = db_path_str
+        st.rerun()
+
+    # ✅ Always use the saved value
+    db_path = Path(st.session_state["db_path_str"]).expanduser()
+
+    # ✅ Make sure DB tables exist
     init_db(db_path)
     ensure_auto_send_table(db_path)
 
     # 🔍 DEBUG: show real DB location
+    st.markdown("### 🔎 Database Debug")
     st.write("Working folder:", Path.cwd())
-    st.write("DB full path:", db_path.resolve())
+    st.write("DB full path:", str(db_path.resolve()))
+    st.write("DB exists:", db_path.exists())
 
     # 🔍 DEBUG: check DB contents
-    import sqlite3
     try:
         con = sqlite3.connect(str(db_path), check_same_thread=False)
         cur = con.cursor()
+
         cur.execute("SELECT COUNT(*) FROM learners")
         learners_count = cur.fetchone()[0]
+
         cur.execute("SELECT COUNT(*) FROM attendance")
         attendance_count = cur.fetchone()[0]
+
+        cur.execute("SELECT COUNT(*) FROM inout_log")
+        inout_count = cur.fetchone()[0]
+
         con.close()
 
+        st.success("✅ DB connected")
         st.write("Learners in DB:", learners_count)
         st.write("Attendance marks in DB:", attendance_count)
+        st.write("IN/OUT logs:", inout_count)
+
     except Exception as e:
         st.error(f"DB check failed: {e}")
 
-    # (leave the rest of your sidebar code below)
+    # ✅ Your other sidebar settings below (keep these)
+    st.markdown("### Grade capacity (benchmark)")
+    grade_capacity = st.number_input(
+        "Capacity per grade",
+        min_value=1,
+        max_value=200,
+        value=DEFAULT_GRADE_CAPACITY,
+        step=1
+    )
+
+    st.markdown("### WhatsApp Recipients")
+    st.write(WHATSAPP_RECIPIENTS)
 
 
 # ------------------ AUTO SEND BIRTHDAYS ------------------
@@ -751,5 +796,6 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
