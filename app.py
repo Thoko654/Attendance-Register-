@@ -33,7 +33,7 @@ from db import (
 APP_TZ = os.environ.get("APP_TIMEZONE", "Africa/Johannesburg")
 TZ = ZoneInfo(APP_TZ)
 
-DB_DEFAULT = os.environ.get("DB_DEFAULT", "app.db")
+DB_DEFAULT = os.environ.get("DB_DEFAULT", "app_v2.db")
 
 WHATSAPP_RECIPIENTS = [
     "+27836280453",
@@ -751,4 +751,5 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
