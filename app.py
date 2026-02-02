@@ -583,7 +583,7 @@ with tabs[1]:
         # Optional preview (you can remove later)
         with st.expander("🔍 Debug: Preview DOB values (first 15)"):
             st.dataframe(
-                df_learners[["Name", "Surname", "Grade", "Date Of Birth"]].head(15),
+                df_learners[["Name", "Surname", "Grade", "Area", "Date Of Birth"]].head(15),
                 use_container_width=True
             )
 
@@ -864,6 +864,7 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
