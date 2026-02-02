@@ -72,50 +72,50 @@ def get_learners_df(db_path: Path) -> pd.DataFrame:
     df = pd.read_sql("SELECT * FROM learners", con)
     con.close()
 
-    if not df.empty:
-        df = df.rename(columns={"Date_Of_Birth": "Date Of Birth"})
-    return df
+    if df.empty:
+        return df
 
-def replace_learners_from_df(db_path: Path, df: pd.DataFrame):
-    df = df.copy().fillna("").astype(str)
+    lower = {c.lower(): c for c in df.columns}
+    rename = {}
 
-    # Ensure columns
-    for c in ["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]:
+    # barcode
+    if "barcode" in lower:
+        rename[lower["barcode"]] = "Barcode"
+    elif "barcode_norm" in lower:
+        rename[lower["barcode_norm"]] = "Barcode"
+
+    # names
+    if "name" in lower:
+        rename[lower["name"]] = "Name"
+    if "surname" in lower:
+        rename[lower["surname"]] = "Surname"
+    if "grade" in lower:
+        rename[lower["grade"]] = "Grade"
+    if "area" in lower:
+        rename[lower["area"]] = "Area"
+
+    # dob variants
+    if "date_of_birth" in lower:
+        rename[lower["date_of_birth"]] = "Date Of Birth"
+    elif "date_of_birth" in lower:
+        rename[lower["date_of_birth"]] = "Date Of Birth"
+    elif "date_of_birth" in lower:
+        rename[lower["date_of_birth"]] = "Date Of Birth"
+    elif "dob" in lower:
+        rename[lower["dob"]] = "Date Of Birth"
+    elif "date_of_birth" not in lower and "Date_Of_Birth" in df.columns:
+        rename["Date_Of_Birth"] = "Date Of Birth"
+
+    if rename:
+        df = df.rename(columns=rename)
+
+    # ensure required columns always exist
+    for c in ["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]:
         if c not in df.columns:
             df[c] = ""
 
-    con = _connect(db_path)
-    cur = con.cursor()
-    cur.execute("DELETE FROM learners")
+    return df
 
-    for _, r in df.iterrows():
-        bc = norm_barcode(r.get("Barcode", ""))
-        if not bc.strip():
-            continue
-        cur.execute("""
-            INSERT INTO learners (Barcode, Name, Surname, Grade, Area, Date_Of_Birth)
-            VALUES (?,?,?,?,?,?)
-        """, (
-            bc,
-            r.get("Name", ""),
-            r.get("Surname", ""),
-            r.get("Grade", ""),
-            r.get("Area", ""),
-            r.get("Date Of Birth", "")
-        ))
-
-    con.commit()
-    con.close()
-
-def delete_learner_by_barcode(db_path: Path, barcode: str) -> int:
-    con = _connect(db_path)
-    cur = con.cursor()
-    nb = norm_barcode(barcode)
-    cur.execute("DELETE FROM learners WHERE Barcode = ?", (nb,))
-    count = cur.rowcount
-    con.commit()
-    con.close()
-    return count
 
 # ------------------ ATTENDANCE ------------------
 
@@ -255,4 +255,5 @@ def seed_learners_from_csv_if_empty(db_path: Path, csv_path: str):
 
     csv_df = csv_df[["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]]
     replace_learners_from_df(db_path, csv_df)
+
 
