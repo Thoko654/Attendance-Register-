@@ -556,8 +556,6 @@ with tabs[0]:
 
 # ------------------ TODAY TAB ------------------
 
-# ------------------ TODAY TAB ------------------
-
 with tabs[1]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
 
@@ -866,6 +864,7 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
