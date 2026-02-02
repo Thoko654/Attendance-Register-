@@ -559,73 +559,65 @@ with tabs[0]:
 with tabs[1]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
 
-    today_col, today_str, _, _ = today_labels()
+    today_col, _, _, _ = today_labels()
     st.subheader(f"Today's Attendance — {today_col}")
 
-    # ✅ Load learners safely
-    df_learners = get_learners_df(db_path).fillna("").astype(str)
+    def standardize_dob_column(df):
+    """Make sure df has a 'Date Of Birth' column (spaces), even if DB uses Date_Of_Birth."""
+    if df is None or df.empty:
+        return df
 
-    # --- Quick debug info (helps find missing birthdays fast)
+    # If DB column name exists, convert it to the UI column name
+    if "Date Of Birth" not in df.columns and "Date_Of_Birth" in df.columns:
+        df = df.rename(columns={"Date_Of_Birth": "Date Of Birth"})
+
+    # Ensure it exists (so no KeyError)
+    if "Date Of Birth" not in df.columns:
+        df["Date Of Birth"] = ""
+
+    return df
+
+
+    # ✅ Load learners
+    df_learners = get_learners_df(db_path)
+
+    # ✅ Standardize DOB column name so the app never crashes
+    df_learners = standardize_dob_column(df_learners)
+
+    # ✅ Always ensure the other columns exist too (prevents KeyError)
+    for c in ["Name", "Surname", "Grade"]:
+        if c not in df_learners.columns:
+            df_learners[c] = ""
+
+    # ✅ Convert values to safe strings
+    df_learners = df_learners.fillna("").astype(str)
+
+    # ✅ Debug counters
+    dob_filled = (df_learners["Date Of Birth"].str.strip() != "").sum()
     st.caption(f"📌 Learners loaded: {len(df_learners)}")
+    st.caption(f"📌 Learners with DOB filled: {dob_filled}")
 
-    if df_learners.empty:
-        st.warning("No learners found in the database. Go to Manage tab and import/add learners.")
-        st.markdown('</div>', unsafe_allow_html=True)
+    # ✅ Debug preview (SAFE – no KeyError)
+    with st.expander("🔍 Debug: Preview learner columns + DOB values (first 15)"):
+        st.write("Columns:", list(df_learners.columns))
+        st.dataframe(df_learners[["Name", "Surname", "Grade", "Date Of Birth"]].head(15), use_container_width=True)
+
+    # ✅ Birthdays
+    birthdays = get_birthdays_for_week(df_learners)
+
+    if birthdays:
+        st.markdown("### 🎂 Birthdays around this week")
+        for b in birthdays:
+            full_name = f"{b.get('Name','')} {b.get('Surname','')}".strip()
+            grade = b.get("Grade", "")
+            tag = "🎉 Happy Birthday" if b["Kind"] == "today" else ("🎂 Belated" if b["Kind"] == "belated" else "🎁 Upcoming")
+            extra = f" (Grade {grade})" if grade else ""
+            st.write(f"{tag}: {full_name}{extra} — DOB: {b.get('DOB','')}")
     else:
-        # ✅ Ensure DOB column exists
-        if "Date Of Birth" not in df_learners.columns:
-            df_learners["Date Of Birth"] = ""
+        st.caption("No birthdays this week or in the next 7 days.")
 
-        # Debug: check DOB quality
-        dob_non_empty = (df_learners["Date Of Birth"].astype(str).str.strip() != "").sum()
-        st.caption(f"📌 Learners with DOB filled: {dob_non_empty}")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-        # Optional preview (you can remove later)
-        with st.expander("🔍 Debug: Preview DOB values (first 15)"):
-            st.dataframe(
-                df_learners[["Name", "Surname", "Grade", "Area", "Date Of Birth"]].head(15),
-                use_container_width=True
-            )
-
-        # ✅ Get birthdays
-        birthdays = get_birthdays_for_week(df_learners)
-
-        if birthdays:
-            st.markdown("### 🎂 Birthdays around this week")
-
-            today_list = [b for b in birthdays if b["Kind"] == "today"]
-            belated_list = [b for b in birthdays if b["Kind"] == "belated"]
-            upcoming_list = [b for b in birthdays if b["Kind"] == "upcoming"]
-
-            if today_list:
-                st.markdown("#### 🎉 Today")
-                for b in today_list:
-                    full_name = f"{b['Name']} {b['Surname']}".strip()
-                    grade = str(b.get("Grade", "")).strip()
-                    extra = f" (Grade {grade})" if grade else ""
-                    st.write(f"🎉 Happy Birthday: **{full_name}**{extra} — DOB: {b['DOB']}")
-
-            if belated_list:
-                st.markdown("#### 🎂 Belated (last 7 days)")
-                for b in belated_list:
-                    full_name = f"{b['Name']} {b['Surname']}".strip()
-                    grade = str(b.get("Grade", "")).strip()
-                    extra = f" (Grade {grade})" if grade else ""
-                    st.write(f"🎂 Belated: **{full_name}**{extra} — DOB: {b['DOB']}")
-
-            if upcoming_list:
-                st.markdown("#### 🎁 Upcoming (next 7 days)")
-                for b in upcoming_list:
-                    full_name = f"{b['Name']} {b['Surname']}".strip()
-                    grade = str(b.get("Grade", "")).strip()
-                    extra = f" (Grade {grade})" if grade else ""
-                    st.write(f"🎁 Upcoming: **{full_name}**{extra} — DOB: {b['DOB']}")
-
-        else:
-            st.info("No birthdays this week or in the next 7 days.")
-            st.caption("If you expected birthdays, check that DOB values are filled correctly in Manage tab.")
-
-        st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ------------------ GRADES TAB ------------------
@@ -864,6 +856,7 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
