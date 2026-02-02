@@ -346,16 +346,28 @@ with st.sidebar:
     init_db(db_path)
     ensure_auto_send_table(db_path)
 
+    # 🔍 DEBUG: show real DB location
+    st.write("Working folder:", Path.cwd())
+    st.write("DB full path:", db_path.resolve())
+
+    # 🔍 DEBUG: check DB contents
+    import sqlite3
     try:
-        seed_learners_from_csv_if_empty(db_path, "attendance_clean.csv")
+        con = sqlite3.connect(str(db_path), check_same_thread=False)
+        cur = con.cursor()
+        cur.execute("SELECT COUNT(*) FROM learners")
+        learners_count = cur.fetchone()[0]
+        cur.execute("SELECT COUNT(*) FROM attendance")
+        attendance_count = cur.fetchone()[0]
+        con.close()
+
+        st.write("Learners in DB:", learners_count)
+        st.write("Attendance marks in DB:", attendance_count)
     except Exception as e:
-        st.warning(f"Auto-seed failed: {e}")
+        st.error(f"DB check failed: {e}")
 
-    st.markdown("### Grade capacity (benchmark)")
-    grade_capacity = st.number_input("Capacity per grade", min_value=1, max_value=200, value=DEFAULT_GRADE_CAPACITY, step=1)
+    # (leave the rest of your sidebar code below)
 
-    st.markdown("### WhatsApp Recipients")
-    st.write(WHATSAPP_RECIPIENTS)
 
 # ------------------ AUTO SEND BIRTHDAYS ------------------
 
@@ -739,3 +751,4 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
