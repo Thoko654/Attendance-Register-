@@ -563,7 +563,7 @@ with tabs[1]:
     st.subheader(f"Today's Attendance — {today_col}")
 
     def standardize_dob_column(df):
-    """Make sure df has a 'Date Of Birth' column (spaces), even if DB uses Date_Of_Birth."""
+        """Make sure df has a 'Date Of Birth' column (spaces), even if DB uses Date_Of_Birth."""
     if df is None or df.empty:
         return df
 
@@ -856,6 +856,7 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
