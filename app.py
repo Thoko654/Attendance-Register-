@@ -28,6 +28,24 @@ from db import (
     mark_sent_today,
 )
 
+# ------------------ DOB NORMALIZER ------------------
+
+def standardize_dob_column(df):
+    """Make sure df has a 'Date Of Birth' column (spaces), even if DB uses Date_Of_Birth."""
+    if df is None or df.empty:
+        return df
+
+    # Convert DB-style column to UI-style column
+    if "Date Of Birth" not in df.columns and "Date_Of_Birth" in df.columns:
+        df = df.rename(columns={"Date_Of_Birth": "Date Of Birth"})
+
+    # Always ensure column exists
+    if "Date Of Birth" not in df.columns:
+        df["Date Of Birth"] = ""
+
+    return df
+
+
 # ------------------ CONFIG ------------------
 
 APP_TZ = os.environ.get("APP_TIMEZONE", "Africa/Johannesburg")
@@ -839,6 +857,7 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
