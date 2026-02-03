@@ -562,22 +562,6 @@ with tabs[1]:
     today_col, _, _, _ = today_labels()
     st.subheader(f"Today's Attendance — {today_col}")
 
-    def standardize_dob_column(df):
-        """Make sure df has a 'Date Of Birth' column (spaces), even if DB uses Date_Of_Birth."""
-    if df is None or df.empty:
-    return df
-
-    # If DB column name exists, convert it to the UI column name
-    if "Date Of Birth" not in df.columns and "Date_Of_Birth" in df.columns:
-        df = df.rename(columns={"Date_Of_Birth": "Date Of Birth"})
-
-    # Ensure it exists (so no KeyError)
-    if "Date Of Birth" not in df.columns:
-        df["Date Of Birth"] = ""
-
-    return df
-
-
     # ✅ Load learners
     df_learners = get_learners_df(db_path)
 
@@ -617,7 +601,6 @@ with tabs[1]:
         st.caption("No birthdays this week or in the next 7 days.")
 
     st.markdown('</div>', unsafe_allow_html=True)
-
 
 
 # ------------------ GRADES TAB ------------------
@@ -856,6 +839,7 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
