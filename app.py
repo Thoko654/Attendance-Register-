@@ -565,7 +565,7 @@ with tabs[1]:
     def standardize_dob_column(df):
         """Make sure df has a 'Date Of Birth' column (spaces), even if DB uses Date_Of_Birth."""
     if df is None or df.empty:
-        return df
+    return df
 
     # If DB column name exists, convert it to the UI column name
     if "Date Of Birth" not in df.columns and "Date_Of_Birth" in df.columns:
@@ -856,6 +856,7 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
