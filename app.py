@@ -846,7 +846,7 @@ with tabs[5]:
             }
 upsert_learner(db_path, barcode, name, surname, grade, area, dob)
 st.success("✅ Learner added/updated")
-    st.rerun()
+st.rerun()
 
     st.divider()
     st.markdown("### 🗑 Delete learner by barcode")
@@ -899,6 +899,7 @@ st.success("✅ Learner added/updated")
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
