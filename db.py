@@ -19,29 +19,49 @@ def _connect(db_path: Path):
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return sqlite3.connect(str(db_path), check_same_thread=False)
 
+def _table_columns(con, table: str) -> set[str]:
+    """Return a set of column names for a table."""
+    cur = con.cursor()
+    cur.execute(f"PRAGMA table_info({table})")
+    rows = cur.fetchall()  # (cid, name, type, notnull, dflt_value, pk)
+    return {r[1] for r in rows}
+
+def _ensure_learners_schema(con):
+    """
+    Upgrade existing learners table if it was created with an older schema.
+    Prevents OperationalError when INSERT expects missing columns.
+    """
+    cols = _table_columns(con, "learners")
+
+    # If someone created older table without these columns, add them.
+    if "Area" not in cols:
+        con.execute("ALTER TABLE learners ADD COLUMN Area TEXT")
+
+    if "Date_Of_Birth" not in cols:
+        con.execute("ALTER TABLE learners ADD COLUMN Date_Of_Birth TEXT")
+
 def _normalize_learner_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     Make sure learners dataframe always has these columns:
     Barcode, Name, Surname, Grade, Area, Date Of Birth
     """
     if df is None or df.empty:
-        # Return empty with required columns
-        return pd.DataFrame(columns=["Barcode","Name","Surname","Grade","Area","Date Of Birth"])
+        return pd.DataFrame(columns=["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"])
 
     df = df.copy()
+
     # Normalize column names (case-insensitive matching)
-    lower_map = {c.lower().strip(): c for c in df.columns}
+    lower_map = {str(c).lower().strip(): c for c in df.columns}
 
     def pick(*candidates):
         for cand in candidates:
-            key = cand.lower()
+            key = cand.lower().strip()
             if key in lower_map:
                 return lower_map[key]
         return None
 
     rename = {}
 
-    # Standard fields
     c = pick("barcode")
     if c: rename[c] = "Barcode"
 
@@ -61,13 +81,11 @@ def _normalize_learner_columns(df: pd.DataFrame) -> pd.DataFrame:
     c = pick("date of birth", "date_of_birth", "date_of_birth ", "dob", "birthdate", "birth date", "date_of_birth")
     if c:
         rename[c] = "Date Of Birth"
-    elif "date_of_birth" in lower_map:
-        rename[lower_map["date_of_birth"]] = "Date Of Birth"
-    elif "date_of_birth " in lower_map:
-        rename[lower_map["date_of_birth "]] = "Date Of Birth"
-    elif "date_of_birth" not in lower_map and "date_of_birth" not in df.columns and "Date_Of_Birth" in df.columns:
+
+    # DB uses Date_Of_Birth
+    if "date_of_birth" not in lower_map and "Date_Of_Birth" in df.columns:
         rename["Date_Of_Birth"] = "Date Of Birth"
-    elif "Date_Of_Birth" in df.columns:
+    if "Date_Of_Birth" in df.columns:
         rename["Date_Of_Birth"] = "Date Of Birth"
 
     if rename:
@@ -84,7 +102,7 @@ def _normalize_learner_columns(df: pd.DataFrame) -> pd.DataFrame:
     # Normalize barcode values
     df["Barcode"] = df["Barcode"].apply(norm_barcode)
 
-    return df[["Barcode","Name","Surname","Grade","Area","Date Of Birth"]]
+    return df[["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]]
 
 
 # ------------------ INIT DB ------------------
@@ -104,6 +122,9 @@ def init_db(db_path: Path):
         Date_Of_Birth TEXT
     )
     """)
+
+    # ✅ IMPORTANT: Upgrade schema if DB already existed with older columns
+    _ensure_learners_schema(con)
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS attendance (
@@ -149,7 +170,7 @@ def get_learners_df(db_path: Path) -> pd.DataFrame:
         con.close()
 
     if df.empty:
-        return pd.DataFrame(columns=["Barcode","Name","Surname","Grade","Area","Date Of Birth"])
+        return pd.DataFrame(columns=["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"])
 
     # DB uses Date_Of_Birth
     if "Date_Of_Birth" in df.columns:
@@ -166,6 +187,9 @@ def replace_learners_from_df(db_path: Path, df: pd.DataFrame):
 
     con = _connect(db_path)
     cur = con.cursor()
+
+    # ✅ ensure table has the latest columns before inserting
+    _ensure_learners_schema(con)
 
     # Replace learners entirely
     cur.execute("DELETE FROM learners")
@@ -200,10 +224,22 @@ def add_or_update_learner(db_path: Path, barcode: str, name: str, surname: str,
 
     con = _connect(db_path)
     cur = con.cursor()
+
+    # ✅ ensure schema is correct before inserting
+    _ensure_learners_schema(con)
+
     cur.execute("""
         INSERT OR REPLACE INTO learners (Barcode, Name, Surname, Grade, Area, Date_Of_Birth)
         VALUES (?,?,?,?,?,?)
-    """, (bc, name.strip(), surname.strip(), str(grade).strip(), str(area).strip(), str(dob).strip()))
+    """, (
+        bc,
+        str(name).strip(),
+        str(surname).strip(),
+        str(grade).strip(),
+        str(area).strip(),
+        str(dob).strip()
+    ))
+
     con.commit()
     con.close()
 
@@ -255,7 +291,7 @@ def get_wide_sheet(db_path: Path) -> pd.DataFrame:
         return learners.fillna("")
 
     att = att.fillna("").astype(str)
-    # Normalize barcode in attendance too
+
     if "Barcode" in att.columns:
         att["Barcode"] = att["Barcode"].apply(norm_barcode)
 
@@ -383,6 +419,5 @@ def seed_learners_from_csv_if_empty(db_path: Path, csv_path: str):
         if c not in csv_df.columns:
             csv_df[c] = ""
 
-    csv_df = csv_df[["Barcode","Name","Surname","Grade","Area","Date Of Birth"]]
+    csv_df = csv_df[["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]]
     replace_learners_from_df(db_path, csv_df)
-
