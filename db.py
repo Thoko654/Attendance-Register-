@@ -174,16 +174,18 @@ def replace_learners_from_df(db_path: Path, df: pd.DataFrame):
         bc = norm_barcode(r.get("Barcode", ""))
         if not bc.strip():
             continue
+
         cur.execute("""
-            INSERT OR REPLACE INTO learners (Barcode, Name, Surname, Grade, Area, Date_Of_Birth)
+            INSERT OR REPLACE INTO learners
+            (Barcode, Name, Surname, Grade, Area, Date_Of_Birth)
             VALUES (?,?,?,?,?,?)
         """, (
             bc,
-            str(r.get("Name","")).strip(),
-            str(r.get("Surname","")).strip(),
-            str(r.get("Grade","")).strip(),
-            str(r.get("Area","")).strip(),
-            str(r.get("Date Of Birth","")).strip(),
+            str(r.get("Name", "")).strip(),
+            str(r.get("Surname", "")).strip(),
+            str(r.get("Grade", "")).strip(),
+            str(r.get("Area", "")).strip(),
+            str(r.get("Date Of Birth", "")).strip(),
         ))
 
     con.commit()
@@ -383,3 +385,4 @@ def seed_learners_from_csv_if_empty(db_path: Path, csv_path: str):
 
     csv_df = csv_df[["Barcode","Name","Surname","Grade","Area","Date Of Birth"]]
     replace_learners_from_df(db_path, csv_df)
+
