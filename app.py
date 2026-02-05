@@ -844,7 +844,7 @@ with tabs[5]:
                 "Area": new_area.strip(),
                 "Date Of Birth": new_dob.strip(),
             }
-upsert_learner(db_path, barcode, name, surname, grade, area, dob)
+    upsert_learner(db_path, barcode, name, surname, grade, area, dob)
 st.success("✅ Learner added/updated")
 st.rerun()
 
@@ -899,6 +899,7 @@ st.rerun()
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
