@@ -54,7 +54,8 @@ def standardize_dob_column(df):
 APP_TZ = os.environ.get("APP_TIMEZONE", "Africa/Johannesburg")
 TZ = ZoneInfo(APP_TZ)
 
-DB_DEFAULT = os.environ.get("DB_DEFAULT", "app_v2.db")
+DB_DEFAULT = str(Path.home() / "app_v2.db")
+
 # ------------------ DB PATH STATE ------------------
 
 if "db_path_str" not in st.session_state:
@@ -949,6 +950,7 @@ with tabs[5]:
                 st.warning("Barcode not found.")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
