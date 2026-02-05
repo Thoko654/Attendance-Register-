@@ -14,9 +14,9 @@ from db import (
     init_db,
     get_wide_sheet,
     get_learners_df,
-    add_or_update_learner,      # ✅ ADD THIS LINE
     replace_learners_from_df,
     delete_learner_by_barcode,
+    add_or_update_learner,   # ✅ ADD THIS
     add_class_date,
     insert_present_mark,
     append_inout_log,
@@ -28,6 +28,7 @@ from db import (
     already_sent_today,
     mark_sent_today,
 )
+
 
 
 # ------------------ DOB NORMALIZER ------------------
@@ -859,106 +860,97 @@ with tabs[5]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Manage Learners / Barcodes")
 
-    # ✅ Always load from DB
-    df = get_learners_df(db_path).fillna("").astype(str)
+    # ✅ Load learners (already normalized from db.py)
+    df = get_learners_df(db_path)
 
-    st.markdown("### ✅ Current learners")
-    st.dataframe(df, use_container_width=True, height=320)
+    # Safety: ensure columns exist
+    for c in ["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]:
+        if c not in df.columns:
+            df[c] = ""
+
+    df = df.fillna("").astype(str)
+
+    st.markdown("### ✅ Current learners (Editable)")
+    st.caption("Edit directly in the table, then click **Save changes**.")
+
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        height=380,
+        num_rows="dynamic",   # ✅ allows adding/removing rows
+        key="learners_editor"
+    )
+
+    colA, colB = st.columns(2)
+
+    with colA:
+        if st.button("💾 Save changes", type="primary", use_container_width=True):
+            # ✅ basic validation: barcode must exist
+            edited = edited.fillna("").astype(str)
+            edited["Barcode"] = edited["Barcode"].astype(str).str.strip()
+
+            if (edited["Barcode"] == "").any():
+                st.error("❌ Every learner must have a Barcode. Remove blank rows or fill barcodes.")
+            else:
+                # ✅ Save to DB (replaces learners table only)
+                replace_learners_from_df(db_path, edited)
+                st.success("✅ Saved successfully!")
+                st.rerun()
+
+    with colB:
+        if st.button("🔄 Reload from database", use_container_width=True):
+            st.rerun()
 
     st.divider()
-    st.markdown("### ➕ Add / Update a learner")
+
+    # ✅ OPTIONAL: Quick add / update form (safe, doesn’t wipe DB)
+    st.markdown("### ➕ Add / Update a learner (quick form)")
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        new_name = st.text_input("Name", key="new_name").strip()
-        new_surname = st.text_input("Surname", key="new_surname").strip()
+        new_name = st.text_input("Name", key="new_name")
+        new_surname = st.text_input("Surname", key="new_surname")
     with c2:
-        new_barcode = st.text_input("Barcode", key="new_barcode").strip()
-        new_grade = st.text_input("Grade", key="new_grade").strip()
+        new_barcode = st.text_input("Barcode", key="new_barcode")
+        new_grade = st.text_input("Grade", key="new_grade")
     with c3:
-        new_area = st.text_input("Area", key="new_area").strip()
-        new_dob = st.text_input("Date Of Birth (e.g. 31-Jan-13)", key="new_dob").strip()
+        new_area = st.text_input("Area", key="new_area")
+        new_dob = st.text_input("Date Of Birth (e.g. 31-Jan-13)", key="new_dob")
 
-    if st.button("Add learner", use_container_width=True):
-        if not new_barcode:
+    if st.button("Add / Update learner", use_container_width=True):
+        if not new_barcode.strip():
             st.error("Barcode is required.")
-        elif not new_name:
-            st.error("Name is required.")
-        elif not new_surname:
-            st.error("Surname is required.")
         else:
-            # ✅ Save directly to DB (no dataframe replacing)
             add_or_update_learner(
-                db_path=db_path,
-                barcode=new_barcode,
-                name=new_name,
-                surname=new_surname,
-                grade=new_grade,
-                area=new_area,
-                dob=new_dob,
+                db_path,
+                new_barcode.strip(),
+                new_name.strip(),
+                new_surname.strip(),
+                new_grade.strip(),
+                new_area.strip(),
+                new_dob.strip()
             )
             st.success("✅ Learner added/updated")
             st.rerun()
 
     st.divider()
+
     st.markdown("### 🗑 Delete learner by barcode")
-    del_code = st.text_input("Barcode to delete", key="del_code").strip()
+    del_code = st.text_input("Barcode to delete", key="del_code")
     if st.button("Delete learner", use_container_width=True):
-        if not del_code:
+        if not del_code.strip():
             st.error("Enter a barcode.")
         else:
-            n = delete_learner_by_barcode(db_path, del_code)
+            n = delete_learner_by_barcode(db_path, del_code.strip())
             if n:
-                st.success(f"✅ Deleted {n} learner(s). Refreshing…")
+                st.success(f"✅ Deleted {n} learner(s).")
                 st.rerun()
             else:
                 st.warning("Barcode not found.")
 
-    st.divider()
-    st.markdown("### 📤 Import / Replace learners from CSV (attendance_clean.csv format)")
-    st.caption("Upload CSV with columns: Name, Surname, Barcode, Grade, Area, Date Of Birth")
-    up = st.file_uploader("Upload CSV", type=["csv"], key="csv_up")
-
-    if up is not None:
-        try:
-            imp = pd.read_csv(up).fillna("").astype(str)
-            imp.columns = [c.strip() for c in imp.columns]
-
-            required = ["Name", "Surname", "Barcode"]
-            if not all(c in imp.columns for c in required):
-                st.error("CSV missing required columns: Name, Surname, Barcode")
-            else:
-                for c in ["Grade", "Area", "Date Of Birth"]:
-                    if c not in imp.columns:
-                        imp[c] = ""
-
-                imp = imp[["Name", "Surname", "Barcode", "Grade", "Area", "Date Of Birth"]]
-                st.dataframe(imp.head(20), use_container_width=True)
-
-                if st.button("REPLACE database learners with this CSV", type="primary", use_container_width=True):
-                    replace_learners_from_df(db_path, imp)
-                    st.success("✅ Imported successfully. Refreshing…")
-                    st.rerun()
-
-        except Exception as e:
-            st.error(f"Import failed: {e}")
-
-    st.divider()
-    st.markdown("### 💬 WhatsApp Test (manual send)")
-    test_msg = st.text_area("Message", value="Test message from Tutor Class Attendance Register ✅", height=100)
-    test_to = st.text_input(
-        "Send to (single number in +27... format)",
-        value=WHATSAPP_RECIPIENTS[0] if WHATSAPP_RECIPIENTS else ""
-    ).strip()
-
-    if st.button("Send WhatsApp test now", use_container_width=True):
-        ok, info = send_whatsapp_message([test_to], test_msg)
-        if ok:
-            st.success(f"✅ Sent. {info}")
-        else:
-            st.error(f"❌ Failed. {info}")
-
     st.markdown('</div>', unsafe_allow_html=True)
+
+
 
 
 
