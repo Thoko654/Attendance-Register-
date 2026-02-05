@@ -75,13 +75,23 @@ META_WA_API_VERSION = os.environ.get("META_WA_API_VERSION", "v22.0").strip()
 
 # ------------------ UTILITIES ------------------
 
+from datetime import datetime
+import pandas as pd
+
 def now_local() -> datetime:
     return datetime.now(TZ)
 
 def today_labels():
+    """
+    Returns:
+      date_col:  e.g. '2-Feb' (used as the attendance column label)
+      date_str:  'YYYY-MM-DD'
+      time_str:  'HH:MM:SS'
+      ts:        ISO timestamp
+    """
     n = now_local()
-    day = str(int(n.strftime("%d")))
-    mon = n.strftime("%b")
+    day = str(int(n.strftime("%d")))          # removes leading zeros
+    mon = n.strftime("%b")                    # Jan, Feb, Mar...
     date_col = f"{day}-{mon}"
     date_str = n.strftime("%Y-%m-%d")
     time_str = n.strftime("%H:%M:%S")
@@ -92,6 +102,7 @@ def today_col_label() -> str:
     return today_labels()[0]
 
 def is_saturday_class_day() -> bool:
+    # Monday=0 ... Saturday=5 ... Sunday=6
     return now_local().weekday() == 5
 
 def should_auto_send(now: datetime) -> bool:
@@ -100,26 +111,50 @@ def should_auto_send(now: datetime) -> bool:
 def label_for_row(r: pd.Series) -> str:
     name = str(r.get("Name", "")).strip()
     surname = str(r.get("Surname", "")).strip()
-    return (name + " " + surname).strip() or str(r.get("Barcode", "")).strip()
+    full = (name + " " + surname).strip()
+    if full:
+        return full
+    return str(r.get("Barcode", "")).strip()
 
 def get_date_columns(df: pd.DataFrame) -> list[str]:
+    """
+    Finds columns that look like attendance labels: '2-Feb', '14-Jun', etc.
+    Sort them by month/day (within a year). If parse fails, keep them last.
+    """
     cols = []
     for c in df.columns:
-        parts = str(c).split("-")
-        if len(parts) == 2 and parts[0].isdigit() and len(parts[0]) <= 2:
-            cols.append(c)
+        c_str = str(c).strip()
+        parts = c_str.split("-")
+        if len(parts) == 2 and parts[0].isdigit() and 1 <= len(parts[0]) <= 2:
+            cols.append(c_str)
 
-    def _key(x):
+    def _key(x: str):
         try:
-            return datetime.strptime(x, "%d-%b").timetuple().tm_yday
+            # Use a dummy year so sorting is consistent
+            return datetime.strptime("2000-" + x, "%Y-%d-%b")
         except Exception:
-            return 999
+            return datetime.max
 
     return sorted(cols, key=_key)
 
-def unique_sorted(series: pd.Series):
-    vals = sorted([v for v in series.astype(str).unique() if v.strip() and v != "nan"])
-    return ["(All)"] + vals
+def unique_sorted(series: pd.Series, include_all: bool = True) -> list[str]:
+    """
+    Returns unique, sorted values from a Series (as strings),
+    excluding blanks / nan. Optionally includes '(All)' at top.
+    """
+    if series is None:
+        return ["(All)"] if include_all else []
+
+    vals = []
+    for v in series.astype(str).unique():
+        s = str(v).strip()
+        if not s or s.lower() == "nan":
+            continue
+        vals.append(s)
+
+    vals = sorted(set(vals))
+    return (["(All)"] + vals) if include_all else vals
+
 
 # ------------------ PERMANENT BACKUP ------------------
 
@@ -857,6 +892,7 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
