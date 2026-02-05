@@ -1,6 +1,6 @@
 # app.py — Tutor Class Attendance Register 2026 (SQLite, FIXED + CLEAN)
 
-import os
+import o
 import base64
 import re
 from pathlib import Path
@@ -901,3 +901,4 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
