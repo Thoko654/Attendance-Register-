@@ -870,19 +870,57 @@ with tabs[4]:
 from db import add_or_update_learner, get_learners_df, delete_learner_by_barcode, replace_learners_from_df
 
 # ------------------ MANAGE TAB ------------------
+
 with tabs[5]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Manage Learners / Barcodes")
 
+    # ✅ Always load from DB
     df = get_learners_df(db_path).fillna("").astype(str)
 
-    st.markdown("### ✅ Current learners")
-    st.dataframe(df, use_container_width=True, height=320)
+    # ✅ Make sure columns exist (prevents KeyError)
+    for c in ["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]:
+        if c not in df.columns:
+            df[c] = ""
+
+    st.markdown("### ✅ Current learners (Editable)")
+    st.caption("Edit directly in the table, then click **Save table changes**.")
+
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        height=420,
+        num_rows="dynamic",
+        key="learners_editor"
+    )
+
+    cA, cB = st.columns(2)
+    with cA:
+        if st.button("💾 Save table changes", use_container_width=True):
+            try:
+                edited_df = edited.copy().fillna("").astype(str)
+
+                # ✅ Keep only required columns, in correct order
+                edited_df = edited_df[["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]]
+
+                # ✅ Remove completely empty rows (barcode blank)
+                edited_df = edited_df[edited_df["Barcode"].astype(str).str.strip() != ""]
+
+                replace_learners_from_df(db_path, edited_df)
+                st.success("✅ Table saved to database.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Save failed: {e}")
+
+    with cB:
+        if st.button("🔄 Reload from database", use_container_width=True):
+            st.rerun()
 
     st.divider()
-    st.markdown("### ➕ Add / Update a learner")
-    c1, c2, c3 = st.columns(3)
 
+    # ------------------ Add / Update a learner ------------------
+    st.markdown("### ➕ Add / Update a learner (by barcode)")
+    c1, c2, c3 = st.columns(3)
     with c1:
         new_name = st.text_input("Name", key="new_name")
         new_surname = st.text_input("Surname", key="new_surname")
@@ -904,12 +942,14 @@ with tabs[5]:
                 surname=new_surname,
                 grade=new_grade,
                 area=new_area,
-                dob=new_dob
+                dob=new_dob,
             )
             st.success("✅ Learner saved to database.")
             st.rerun()
 
     st.divider()
+
+    # ------------------ Delete learner ------------------
     st.markdown("### 🗑 Delete learner by barcode")
     del_code = st.text_input("Barcode to delete", key="del_code")
     if st.button("Delete learner", use_container_width=True):
@@ -923,7 +963,60 @@ with tabs[5]:
             else:
                 st.warning("Barcode not found.")
 
+    st.divider()
+
+    # ------------------ CSV import / replace ------------------
+    st.markdown("### 📤 Import / Replace learners from CSV (attendance_clean.csv format)")
+    st.caption("Upload CSV with columns: Name, Surname, Barcode, Grade, Area, Date Of Birth")
+
+    up = st.file_uploader("Upload CSV", type=["csv"], key="csv_up")
+    if up is not None:
+        try:
+            imp = pd.read_csv(up).fillna("").astype(str)
+            imp.columns = [c.strip() for c in imp.columns]
+
+            required = ["Name", "Surname", "Barcode"]
+            if not all(c in imp.columns for c in required):
+                st.error("CSV missing required columns: Name, Surname, Barcode")
+            else:
+                for c in ["Grade", "Area", "Date Of Birth"]:
+                    if c not in imp.columns:
+                        imp[c] = ""
+
+                imp = imp[["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]]
+                st.dataframe(imp.head(20), use_container_width=True)
+
+                if st.button("REPLACE database learners with this CSV", type="primary", use_container_width=True):
+                    replace_learners_from_df(db_path, imp)
+                    st.success("✅ Imported successfully.")
+                    st.rerun()
+
+        except Exception as e:
+            st.error(f"Import failed: {e}")
+
+    st.divider()
+
+    # ------------------ WhatsApp Test ------------------
+    st.markdown("### 💬 WhatsApp Test (manual send)")
+    test_msg = st.text_area(
+        "Message",
+        value="Test message from Tutor Class Attendance Register ✅",
+        height=100
+    )
+    test_to = st.text_input(
+        "Send to (single number in +27... format)",
+        value=WHATSAPP_RECIPIENTS[0] if WHATSAPP_RECIPIENTS else ""
+    )
+
+    if st.button("Send WhatsApp test now", use_container_width=True):
+        ok, info = send_whatsapp_message([test_to], test_msg)
+        if ok:
+            st.success(f"✅ Sent. {info}")
+        else:
+            st.error(f"❌ Failed. {info}")
+
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
