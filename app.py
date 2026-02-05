@@ -1,6 +1,6 @@
 # app.py — Tutor Class Attendance Register 2026 (SQLite version)
 
-import os
+import o
 import base64
 from pathlib import Path
 from datetime import datetime, timedelta, time as dtime
@@ -1016,6 +1016,7 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
