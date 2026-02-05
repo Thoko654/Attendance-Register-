@@ -456,30 +456,41 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ------------------ SIDEBAR ------------------
-
 import sqlite3
+from pathlib import Path
 
-# ✅ Keep DB path persistent (so refresh does NOT reset to app.db)
+# ✅ 1) Use a stable default DB path inside the app folder
+# This avoids accidentally creating "app.db" somewhere else.
+DB_DEFAULT = "app_v2.db"  # keep your existing one
+
+# ✅ 2) Persist DB name in session_state (prevents reset on rerun)
 if "db_path_str" not in st.session_state:
-    st.session_state["db_path_str"] = DB_DEFAULT  # only set once
+    st.session_state["db_path_str"] = DB_DEFAULT
 
 with st.sidebar:
     st.header("Settings")
 
-    # ✅ Use session_state value (persistent)
-    db_path_str = st.text_input(
-        "Database file path",
-        value=st.session_state["db_path_str"],
-        key="db_path_input"
+    # ✅ 3) Force DB file to be inside the project directory (stable)
+    # This prevents switching to random paths that look like "data disappeared".
+    base_dir = Path.cwd()  # on Streamlit cloud: /mount/src/your_app
+    current_db_name = Path(st.session_state["db_path_str"]).name  # only the filename
+    db_file_name = st.text_input(
+        "Database file name (do NOT change unless needed)",
+        value=current_db_name,
+        key="db_file_name"
     ).strip()
 
-    # ✅ If user changed it, save + rerun immediately
-    if db_path_str and db_path_str != st.session_state["db_path_str"]:
-        st.session_state["db_path_str"] = db_path_str
+    # ✅ Only allow .db files
+    if db_file_name and not db_file_name.endswith(".db"):
+        st.warning("⚠ Please use a filename ending with .db (example: app_v2.db)")
+
+    # ✅ Save + rerun only if changed
+    if db_file_name and db_file_name != current_db_name:
+        st.session_state["db_path_str"] = db_file_name
         st.rerun()
 
-    # ✅ Always use the saved value
-    db_path = Path(st.session_state["db_path_str"]).expanduser()
+    # ✅ Build FULL DB PATH (absolute)
+    db_path = (base_dir / Path(st.session_state["db_path_str"]).name).resolve()
 
     # ✅ Make sure DB tables exist
     init_db(db_path)
@@ -487,8 +498,8 @@ with st.sidebar:
 
     # 🔍 DEBUG: show real DB location
     st.markdown("### 🔎 Database Debug")
-    st.write("Working folder:", Path.cwd())
-    st.write("DB full path:", str(db_path.resolve()))
+    st.write("Working folder:", str(base_dir))
+    st.write("DB full path:", str(db_path))
     st.write("DB exists:", db_path.exists())
 
     # 🔍 DEBUG: check DB contents
@@ -527,6 +538,7 @@ with st.sidebar:
 
     st.markdown("### WhatsApp Recipients")
     st.write(WHATSAPP_RECIPIENTS)
+
 
 
 # ------------------ AUTO SEND BIRTHDAYS ------------------
@@ -950,6 +962,7 @@ with tabs[5]:
                 st.warning("Barcode not found.")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
