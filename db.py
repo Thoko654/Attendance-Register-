@@ -19,6 +19,11 @@ def _connect(db_path: Path):
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return sqlite3.connect(str(db_path), check_same_thread=False)
 
+def _table_exists(con, table: str) -> bool:
+    cur = con.cursor()
+    cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,))
+    return cur.fetchone() is not None
+
 def _table_columns_lower(con, table: str) -> set[str]:
     """Return a set of LOWERCASED column names for a table."""
     cur = con.cursor()
@@ -26,39 +31,48 @@ def _table_columns_lower(con, table: str) -> set[str]:
     rows = cur.fetchall()
     return {str(r[1]).strip().lower() for r in rows}
 
+def _safe_add_column(con, table: str, column_def: str):
+    """
+    Safely add a column (never crash app).
+    column_def example: "Area TEXT"
+    """
+    try:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
+    except Exception:
+        # Ignore any error here (duplicate column, locked DB, etc.)
+        pass
+
 def _ensure_learners_schema(con):
     """
     Upgrade existing learners table if it was created with an older schema.
     Uses lowercase comparison to avoid 'Area' vs 'area' duplicate errors.
+    Never crashes the app.
     """
+    if not _table_exists(con, "learners"):
+        return
+
     cols = _table_columns_lower(con, "learners")
 
     # Add Area column if missing (case-insensitive)
     if "area" not in cols:
-        try:
-            con.execute("ALTER TABLE learners ADD COLUMN Area TEXT")
-        except sqlite3.OperationalError:
-            pass
+        _safe_add_column(con, "learners", "Area TEXT")
 
     # Add Date_Of_Birth column if missing (case-insensitive)
+    # SQLite stores Date_Of_Birth as "date_of_birth" when lowercased
     if "date_of_birth" not in cols:
-        try:
-            con.execute("ALTER TABLE learners ADD COLUMN Date_Of_Birth TEXT")
-        except sqlite3.OperationalError:
-            pass
-
+        _safe_add_column(con, "learners", "Date_Of_Birth TEXT")
 
 def _normalize_learner_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     Make sure learners dataframe always has these columns:
     Barcode, Name, Surname, Grade, Area, Date Of Birth
     """
+    required = ["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]
+
     if df is None or df.empty:
-        return pd.DataFrame(columns=["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"])
+        return pd.DataFrame(columns=required)
 
     df = df.copy()
-
-    # Normalize column names (case-insensitive matching)
     lower_map = {str(c).lower().strip(): c for c in df.columns}
 
     def pick(*candidates):
@@ -86,31 +100,24 @@ def _normalize_learner_columns(df: pd.DataFrame) -> pd.DataFrame:
     if c: rename[c] = "Area"
 
     # DOB variants
-    c = pick("date of birth", "date_of_birth", "date_of_birth ", "dob", "birthdate", "birth date", "date_of_birth")
-    if c:
-        rename[c] = "Date Of Birth"
+    c = pick("date of birth", "date_of_birth", "dob", "birthdate", "birth date", "date_of_birth ")
+    if c: rename[c] = "Date Of Birth"
 
     # DB uses Date_Of_Birth
-    if "date_of_birth" not in lower_map and "Date_Of_Birth" in df.columns:
-        rename["Date_Of_Birth"] = "Date Of Birth"
     if "Date_Of_Birth" in df.columns:
         rename["Date_Of_Birth"] = "Date Of Birth"
 
     if rename:
         df = df.rename(columns=rename)
 
-    # Ensure required columns exist
-    for c in ["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]:
+    for c in required:
         if c not in df.columns:
             df[c] = ""
 
-    # Force string type
     df = df.fillna("").astype(str)
-
-    # Normalize barcode values
     df["Barcode"] = df["Barcode"].apply(norm_barcode)
 
-    return df[["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]]
+    return df[required]
 
 
 # ------------------ INIT DB ------------------
@@ -177,11 +184,8 @@ def get_learners_df(db_path: Path) -> pd.DataFrame:
     finally:
         con.close()
 
-    if df.empty:
-        return pd.DataFrame(columns=["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"])
-
     # DB uses Date_Of_Birth
-    if "Date_Of_Birth" in df.columns:
+    if not df.empty and "Date_Of_Birth" in df.columns:
         df = df.rename(columns={"Date_Of_Birth": "Date Of Birth"})
 
     return _normalize_learner_columns(df)
@@ -196,10 +200,8 @@ def replace_learners_from_df(db_path: Path, df: pd.DataFrame):
     con = _connect(db_path)
     cur = con.cursor()
 
-    # ✅ ensure table has the latest columns before inserting
     _ensure_learners_schema(con)
 
-    # Replace learners entirely
     cur.execute("DELETE FROM learners")
 
     for _, r in df.iterrows():
@@ -233,11 +235,11 @@ def add_or_update_learner(db_path: Path, barcode: str, name: str, surname: str,
     con = _connect(db_path)
     cur = con.cursor()
 
-    # ✅ ensure schema is correct before inserting
     _ensure_learners_schema(con)
 
     cur.execute("""
-        INSERT OR REPLACE INTO learners (Barcode, Name, Surname, Grade, Area, Date_Of_Birth)
+        INSERT OR REPLACE INTO learners
+        (Barcode, Name, Surname, Grade, Area, Date_Of_Birth)
         VALUES (?,?,?,?,?,?)
     """, (
         bc,
@@ -283,7 +285,6 @@ def insert_present_mark(db_path: Path, date_label: str, date_str: str, time_str:
 def get_wide_sheet(db_path: Path) -> pd.DataFrame:
     """
     Join learners with attendance pivot (wide format).
-    Columns: Barcode, Name, Surname, Grade, Area, Date Of Birth, plus date columns like '3-Feb'
     """
     learners = get_learners_df(db_path)
     if learners.empty:
@@ -429,4 +430,3 @@ def seed_learners_from_csv_if_empty(db_path: Path, csv_path: str):
 
     csv_df = csv_df[["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]]
     replace_learners_from_df(db_path, csv_df)
-
