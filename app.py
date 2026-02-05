@@ -1,7 +1,8 @@
-# app.py — Tutor Class Attendance Register 2026 (SQLite version)
+# app.py — Tutor Class Attendance Register 2026 (SQLite, FIXED + CLEAN)
 
 import os
 import base64
+import re
 from pathlib import Path
 from datetime import datetime, timedelta, time as dtime
 from zoneinfo import ZoneInfo
@@ -16,7 +17,7 @@ from db import (
     get_learners_df,
     replace_learners_from_df,
     delete_learner_by_barcode,
-    add_or_update_learner,   # ✅ ADD THIS
+    add_or_update_learner,          # ✅ for Manage tab Add/Update
     add_class_date,
     insert_present_mark,
     append_inout_log,
@@ -29,38 +30,10 @@ from db import (
     mark_sent_today,
 )
 
-
-
-# ------------------ DOB NORMALIZER ------------------
-
-def standardize_dob_column(df):
-    """Make sure df has a 'Date Of Birth' column (spaces), even if DB uses Date_Of_Birth."""
-    if df is None or df.empty:
-        return df
-
-    # Convert DB-style column to UI-style column
-    if "Date Of Birth" not in df.columns and "Date_Of_Birth" in df.columns:
-        df = df.rename(columns={"Date_Of_Birth": "Date Of Birth"})
-
-    # Always ensure column exists
-    if "Date Of Birth" not in df.columns:
-        df["Date Of Birth"] = ""
-
-    return df
-
-
 # ------------------ CONFIG ------------------
 
 APP_TZ = os.environ.get("APP_TIMEZONE", "Africa/Johannesburg")
 TZ = ZoneInfo(APP_TZ)
-
-DB_DEFAULT = str(Path.home() / "app_v2.db")
-
-# ------------------ DB PATH STATE ------------------
-
-if "db_path_str" not in st.session_state:
-    st.session_state.db_path_str = DB_DEFAULT
-
 
 WHATSAPP_RECIPIENTS = [
     "+27836280453",
@@ -71,26 +44,23 @@ SEND_DAY_WEEKDAY = 5          # Saturday
 SEND_AFTER_TIME = dtime(9, 0) # 09:00
 DEFAULT_GRADE_CAPACITY = 15
 
-BACKUP_LEARNERS_CSV = "learners_backup.csv"
+# (Optional) CSV seed file (only used if DB learners is empty)
+SEED_CSV = "attendance_clean.csv"
 
+# WhatsApp (Meta Cloud)
 META_WA_TOKEN = os.environ.get("META_WA_TOKEN", "").strip()
 META_WA_PHONE_NUMBER_ID = os.environ.get("META_WA_PHONE_NUMBER_ID", "").strip()
 META_WA_API_VERSION = os.environ.get("META_WA_API_VERSION", "v22.0").strip()
 
 # ------------------ UTILITIES ------------------
 
-import re
-from datetime import datetime, timedelta, time as dtime
-import pandas as pd
-
 def now_local() -> datetime:
-    """Current datetime in the app timezone."""
     return datetime.now(TZ)
 
 def today_labels():
     """
     Returns:
-      date_col:  e.g. '2-Feb' (attendance column label)
+      date_col:  e.g. '2-Feb' (attendance label)
       date_str:  'YYYY-MM-DD'
       time_str:  'HH:MM:SS'
       ts:        ISO timestamp
@@ -108,33 +78,21 @@ def today_col_label() -> str:
     return today_labels()[0]
 
 def is_saturday_class_day() -> bool:
-    """Monday=0 ... Saturday=5 ... Sunday=6"""
     return now_local().weekday() == 5
 
 def should_auto_send(now: datetime) -> bool:
-    """Auto-send WhatsApp after the configured time on the configured day."""
     return (now.weekday() == SEND_DAY_WEEKDAY) and (now.time() >= SEND_AFTER_TIME)
 
 def label_for_row(r: pd.Series) -> str:
-    """Nice label for a learner row."""
     name = str(r.get("Name", "")).strip()
     surname = str(r.get("Surname", "")).strip()
     full = (name + " " + surname).strip()
     return full or str(r.get("Barcode", "")).strip()
 
 def _looks_like_date_label(x: str) -> bool:
-    """
-    True if looks like '2-Feb', '14-Jun', etc.
-    Accepts 1-2 digit day + '-' + 3-letter month.
-    """
-    s = str(x).strip()
-    return bool(re.match(r"^\d{1,2}-[A-Za-z]{3}$", s))
+    return bool(re.match(r"^\d{1,2}-[A-Za-z]{3}$", str(x).strip()))
 
 def get_date_columns(df: pd.DataFrame) -> list[str]:
-    """
-    Finds attendance date columns like '2-Feb', '14-Jun' and sorts them by
-    month/day consistently (using a dummy year).
-    """
     if df is None or df.empty:
         return []
 
@@ -146,20 +104,13 @@ def get_date_columns(df: pd.DataFrame) -> list[str]:
 
     def _key(x: str):
         try:
-            # dummy year for consistent sorting
             return datetime.strptime("2000-" + x, "%Y-%d-%b")
         except Exception:
             return datetime.max
 
-    # remove duplicates, keep stable sorting
-    cols = sorted(set(cols), key=_key)
-    return cols
+    return sorted(set(cols), key=_key)
 
 def unique_sorted(series: pd.Series, include_all: bool = True) -> list[str]:
-    """
-    Returns unique, sorted values from a Series (as strings),
-    excluding blanks / nan. Optionally includes '(All)' at top.
-    """
     if series is None:
         return ["(All)"] if include_all else []
 
@@ -173,75 +124,54 @@ def unique_sorted(series: pd.Series, include_all: bool = True) -> list[str]:
     vals = sorted(set(vals))
     return (["(All)"] + vals) if include_all else vals
 
-# ------------------ DOB helpers (used by Birthdays) ------------------
+# ------------------ DOB HELPERS + BIRTHDAYS ------------------
+
+def standardize_dob_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure UI always has 'Date Of Birth' column name."""
+    if df is None:
+        return pd.DataFrame(columns=["Barcode","Name","Surname","Grade","Area","Date Of Birth"])
+    if df.empty:
+        # keep columns stable
+        for c in ["Barcode","Name","Surname","Grade","Area","Date Of Birth"]:
+            if c not in df.columns:
+                df[c] = ""
+        return df
+
+    # DB uses Date_Of_Birth internally
+    if "Date Of Birth" not in df.columns and "Date_Of_Birth" in df.columns:
+        df = df.rename(columns={"Date_Of_Birth": "Date Of Birth"})
+
+    if "Date Of Birth" not in df.columns:
+        df["Date Of Birth"] = ""
+
+    return df
 
 def parse_dob(dob_str: str):
-    """
-    Parse DOB safely from many common formats.
-    Returns a date or None.
-    """
+    """Parse DOB from common formats into a date() or None."""
     s = str(dob_str).strip()
     if not s or s.lower() in {"nan", "none", "null"}:
         return None
 
     s = s.replace("\\", "/").replace(".", "/")
-    s = " ".join(s.split())  # collapse extra spaces
+    s = " ".join(s.split())
 
     formats = [
-        "%d-%b-%y", "%d-%b-%Y",     # 31-Jan-13 / 31-Jan-2013
-        "%d/%m/%Y", "%d/%m/%y",     # 31/01/2013 / 31/01/13
-        "%Y-%m-%d",                 # 2013-01-31
-        "%Y/%m/%d",                 # 2013/01/31
-        "%d %b %Y", "%d %B %Y",     # 31 Jan 2013 / 31 January 2013
-        "%d %b %y", "%d %B %y",     # 31 Jan 13
+        "%d-%b-%y", "%d-%b-%Y",     # 5-Feb-15 / 5-Feb-2015
+        "%d/%m/%Y", "%d/%m/%y",     # 05/02/2015 / 05/02/15
+        "%Y-%m-%d",                 # 2015-02-05
+        "%d-%m-%Y",                 # 05-02-2015
+        "%d %b %Y", "%d %B %Y",     # 5 Feb 2015 / 5 February 2015
+        "%d %b %y", "%d %B %y",
     ]
-
     for fmt in formats:
         try:
             return datetime.strptime(s, fmt).date()
         except ValueError:
             continue
-
     return None
-
-
-# ------------------ PERMANENT BACKUP ------------------
-
-def save_learners_backup(df_learners: pd.DataFrame):
-    try:
-        df_learners.to_csv(BACKUP_LEARNERS_CSV, index=False)
-    except Exception:
-        pass
-
-# ------------------ BIRTHDAYS ------------------
-
-def parse_dob(dob_str: str):
-    dob_str = str(dob_str).strip()
-    if not dob_str:
-        return None
-
-    formats = [
-        "%d-%b-%y",   # 5-Feb-15
-        "%d-%b-%Y",   # 5-Feb-2015
-        "%d/%m/%Y",
-        "%Y-%m-%d",
-        "%d-%m-%Y",
-        "%d %b %Y",
-        "%d %B %Y",
-    ]
-
-    for fmt in formats:
-        try:
-            return datetime.strptime(dob_str, fmt).date()
-        except ValueError:
-            continue
-
-    return None
-
 
 def get_birthdays_for_week(df: pd.DataFrame, today=None):
-    if "Date Of Birth" not in df.columns:
-        return []
+    df = standardize_dob_column(df)
 
     if today is None:
         today = now_local().date()
@@ -258,6 +188,7 @@ def get_birthdays_for_week(df: pd.DataFrame, today=None):
         try:
             birthday_this_year = dob.replace(year=today.year)
         except ValueError:
+            # ignore Feb 29 edge cases
             continue
 
         if birthday_this_year == today:
@@ -270,12 +201,16 @@ def get_birthdays_for_week(df: pd.DataFrame, today=None):
             continue
 
         results.append({
-            "Name": str(r.get("Name", "")),
-            "Surname": str(r.get("Surname", "")),
-            "Grade": str(r.get("Grade", "")),
-            "DOB": str(r.get("Date Of Birth", "")),
+            "Name": str(r.get("Name", "")).strip(),
+            "Surname": str(r.get("Surname", "")).strip(),
+            "Grade": str(r.get("Grade", "")).strip(),
+            "DOB": str(r.get("Date Of Birth", "")).strip(),
             "Kind": kind,
         })
+
+    # sort: today -> upcoming -> belated
+    order = {"today": 0, "upcoming": 1, "belated": 2}
+    results.sort(key=lambda x: order.get(x["Kind"], 99))
     return results
 
 def build_birthday_message(birthdays: list[dict]) -> str:
@@ -285,7 +220,7 @@ def build_birthday_message(birthdays: list[dict]) -> str:
     for b in birthdays:
         full_name = f"{b['Name']} {b['Surname']}".strip()
         grade = b.get("Grade", "")
-        label = "🎉 Today" if b["Kind"] == "today" else ("🎂 Belated" if b["Kind"] == "belated" else "🎁 Upcoming")
+        label = "🎉 Today" if b["Kind"] == "today" else ("🎁 Upcoming" if b["Kind"] == "upcoming" else "🎂 Belated")
         extra = f" (Grade {grade})" if grade else ""
         lines.append(f"{label}: {full_name}{extra} — DOB {b['DOB']}")
     return "\n".join(lines)
@@ -365,12 +300,11 @@ def build_grades_export(df: pd.DataFrame, date_sel: str, grades: list[str], grad
     learners["Date"] = date_sel
 
     if date_sel in learners.columns:
-        learners["Status"] = learners[date_sel].astype(str).apply(lambda x: "Present" if x.strip() == "1" else "Absent")
+        learners["Status"] = learners[date_sel].astype(str).apply(lambda x: "Present" if str(x).strip() == "1" else "Absent")
     else:
         learners["Status"] = "Absent"
 
     learners_export = learners[["Section","Date","Grade","Name","Surname","Barcode","Status"]].copy()
-
     combined_export_df = pd.concat([summary_df, learners_export], ignore_index=True)
     return summary_df.drop(columns=["Section"]), combined_export_df
 
@@ -455,67 +389,60 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# ------------------ SIDEBAR ------------------
+# ------------------ SIDEBAR (STABLE DB IN APP FOLDER) ------------------
+
 import sqlite3
-from pathlib import Path
 
-# ✅ 1) Use a stable default DB path inside the app folder
-# This avoids accidentally creating "app.db" somewhere else.
-DB_DEFAULT = "app_v2.db"  # keep your existing one
+DEFAULT_DB_NAME = "app_v2.db"  # ✅ keep your DB name stable
 
-# ✅ 2) Persist DB name in session_state (prevents reset on rerun)
 if "db_path_str" not in st.session_state:
-    st.session_state["db_path_str"] = DB_DEFAULT
+    st.session_state["db_path_str"] = DEFAULT_DB_NAME
 
 with st.sidebar:
     st.header("Settings")
 
-    # ✅ 3) Force DB file to be inside the project directory (stable)
-    # This prevents switching to random paths that look like "data disappeared".
-    base_dir = Path.cwd()  # on Streamlit cloud: /mount/src/your_app
-    current_db_name = Path(st.session_state["db_path_str"]).name  # only the filename
+    base_dir = Path.cwd()
+    current_db_name = Path(st.session_state["db_path_str"]).name
+
     db_file_name = st.text_input(
-        "Database file name (do NOT change unless needed)",
+        "Database file name (.db)",
         value=current_db_name,
         key="db_file_name"
     ).strip()
 
-    # ✅ Only allow .db files
     if db_file_name and not db_file_name.endswith(".db"):
         st.warning("⚠ Please use a filename ending with .db (example: app_v2.db)")
 
-    # ✅ Save + rerun only if changed
     if db_file_name and db_file_name != current_db_name:
         st.session_state["db_path_str"] = db_file_name
         st.rerun()
 
-    # ✅ Build FULL DB PATH (absolute)
     db_path = (base_dir / Path(st.session_state["db_path_str"]).name).resolve()
 
-    # ✅ Make sure DB tables exist
+    # create / upgrade tables
     init_db(db_path)
     ensure_auto_send_table(db_path)
 
-    # 🔍 DEBUG: show real DB location
+    # Optional: seed from CSV only if learners table is empty
+    try:
+        seed_learners_from_csv_if_empty(db_path, SEED_CSV)
+    except Exception:
+        pass
+
     st.markdown("### 🔎 Database Debug")
     st.write("Working folder:", str(base_dir))
     st.write("DB full path:", str(db_path))
     st.write("DB exists:", db_path.exists())
 
-    # 🔍 DEBUG: check DB contents
     try:
         con = sqlite3.connect(str(db_path), check_same_thread=False)
         cur = con.cursor()
-
         cur.execute("SELECT COUNT(*) FROM learners")
         learners_count = cur.fetchone()[0]
-
         cur.execute("SELECT COUNT(*) FROM attendance")
         attendance_count = cur.fetchone()[0]
-
         cur.execute("SELECT COUNT(*) FROM inout_log")
         inout_count = cur.fetchone()[0]
-
         con.close()
 
         st.success("✅ DB connected")
@@ -526,7 +453,6 @@ with st.sidebar:
     except Exception as e:
         st.error(f"DB check failed: {e}")
 
-    # ✅ Your other sidebar settings below (keep these)
     st.markdown("### Grade capacity (benchmark)")
     grade_capacity = st.number_input(
         "Capacity per grade",
@@ -539,27 +465,20 @@ with st.sidebar:
     st.markdown("### WhatsApp Recipients")
     st.write(WHATSAPP_RECIPIENTS)
 
-
-
-# ------------------ AUTO SEND BIRTHDAYS ------------------
+# ------------------ AUTO SEND BIRTHDAYS (FIXED) ------------------
 
 try:
     now = now_local()
     _, date_str, _, ts_iso = today_labels()
 
     if (not already_sent_today(db_path, date_str)) and should_auto_send(now):
-       df_learners = get_learners_df(db_path).fillna("").astype(str)
+        df_learners = get_learners_df(db_path).fillna("").astype(str)
+        df_learners = standardize_dob_column(df_learners)
 
-    if not df_learners.empty:
-        birthdays = get_birthdays_for_week(df_learners)
-    else:
-        birthdays = []
-
-
+        birthdays = get_birthdays_for_week(df_learners) if not df_learners.empty else []
         if birthdays:
             msg = build_birthday_message(birthdays)
             ok, info = send_whatsapp_message(WHATSAPP_RECIPIENTS, msg)
-
             if ok:
                 mark_sent_today(db_path, date_str, ts_iso)
                 st.sidebar.success("✅ Auto WhatsApp sent today")
@@ -583,11 +502,11 @@ with tabs[0]:
     add_class_date(db_path, date_col)
 
     df_scan = load_wide_sheet(db_path)
-    if date_col not in df_scan.columns:
+    if not df_scan.empty and date_col not in df_scan.columns:
         df_scan[date_col] = ""
 
     total_learners = len(df_scan)
-    present_today = (df_scan[date_col].astype(str).str.strip() == "1").sum() if total_learners else 0
+    present_today = (df_scan[date_col].astype(str).str.strip() == "1").sum() if (total_learners and date_col in df_scan.columns) else 0
     absent_today = total_learners - present_today
 
     st.subheader("📊 Today")
@@ -677,36 +596,12 @@ with tabs[1]:
     st.subheader(f"Today's Attendance — {today_col}")
 
     df_learners = get_learners_df(db_path).fillna("").astype(str)
+    df_learners = standardize_dob_column(df_learners)
 
-    # Ensure required columns exist
-    for c in ["Name", "Surname", "Grade", "Date Of Birth"]:
+    for c in ["Name", "Surname", "Grade"]:
         if c not in df_learners.columns:
             df_learners[c] = ""
 
-    # --- DEBUG PANEL (shows what the DB really contains) ---
-    with st.expander("🔍 Debug birthdays (click to open)"):
-        st.write("Columns:", list(df_learners.columns))
-        st.write("Learners loaded:", len(df_learners))
-
-        dob_non_empty = (df_learners["Date Of Birth"].str.strip() != "").sum()
-        st.write("DOB filled count:", int(dob_non_empty))
-
-        st.write("First 20 DOB values:")
-        st.dataframe(
-            df_learners[["Name", "Surname", "Grade", "Date Of Birth"]].head(20),
-            use_container_width=True
-        )
-
-        # show which DOBs can be parsed
-        parsed_preview = df_learners.copy()
-        parsed_preview["DOB_parsed"] = parsed_preview["Date Of Birth"].apply(parse_dob).astype(str)
-        st.write("Parsed DOB preview (first 20):")
-        st.dataframe(
-            parsed_preview[["Name", "Surname", "Date Of Birth", "DOB_parsed"]].head(20),
-            use_container_width=True
-        )
-
-    # --- BIRTHDAYS LOGIC ---
     birthdays = get_birthdays_for_week(df_learners)
 
     if birthdays:
@@ -714,16 +609,20 @@ with tabs[1]:
         for b in birthdays:
             full_name = f"{b.get('Name','')} {b.get('Surname','')}".strip()
             grade = b.get("Grade", "")
-            tag = "🎉 Happy Birthday" if b["Kind"] == "today" else ("🎂 Belated" if b["Kind"] == "belated" else "🎁 Upcoming")
+            tag = "🎉 Happy Birthday" if b["Kind"] == "today" else ("🎁 Upcoming" if b["Kind"] == "upcoming" else "🎂 Belated")
             extra = f" (Grade {grade})" if grade else ""
             st.write(f"{tag}: {full_name}{extra} — DOB: {b.get('DOB','')}")
     else:
-        st.warning("No birthdays found. Open the Debug panel above to see if DOB is empty or not parsing.")
+        st.info("No birthdays this week / next 7 days. If you expect birthdays, check that DOB values are filled and in a supported format.")
+
+    with st.expander("🔍 Debug birthdays (click to open)"):
+        st.write("Learners loaded:", len(df_learners))
+        st.write("DOB filled count:", int((df_learners["Date Of Birth"].astype(str).str.strip() != "").sum()))
+        preview = df_learners.copy()
+        preview["DOB_parsed"] = preview["Date Of Birth"].apply(parse_dob).astype(str)
+        st.dataframe(preview[["Name","Surname","Grade","Date Of Birth","DOB_parsed"]].head(30), use_container_width=True)
 
     st.markdown('</div>', unsafe_allow_html=True)
-
-
-
 
 # ------------------ GRADES TAB ------------------
 
@@ -747,7 +646,6 @@ with tabs[2]:
             grade_capacity=int(grade_capacity)
         )
 
-        # KPI cards
         k_cols = st.columns(len(grades))
         for i, g in enumerate(grades):
             row = summary_df[summary_df["Grade"].astype(str) == g].iloc[0]
@@ -794,6 +692,7 @@ with tabs[3]:
         view = df[["Name","Surname","Barcode","Grade","Area"]].copy()
         view["Status"] = df[date_sel].astype(str).apply(lambda x: "Present" if str(x).strip() == "1" else "Absent")
         st.dataframe(view, use_container_width=True)
+
         st.download_button(
             "Download this date (CSV)",
             data=view.to_csv(index=False).encode("utf-8"),
@@ -867,18 +766,15 @@ with tabs[4]:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-from db import add_or_update_learner, get_learners_df, delete_learner_by_barcode, replace_learners_from_df
-
-# ------------------ MANAGE TAB ------------------
+# ------------------ MANAGE TAB (EDITABLE + SAVE + ADD/UPDATE + WHATSAPP TEST) ------------------
 
 with tabs[5]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Manage Learners / Barcodes")
 
-    # ✅ Always load from DB
     df = get_learners_df(db_path).fillna("").astype(str)
+    df = standardize_dob_column(df)
 
-    # ✅ Make sure columns exist (prevents KeyError)
     for c in ["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]:
         if c not in df.columns:
             df[c] = ""
@@ -887,7 +783,7 @@ with tabs[5]:
     st.caption("Edit directly in the table, then click **Save table changes**.")
 
     edited = st.data_editor(
-        df,
+        df[["Barcode","Name","Surname","Grade","Area","Date Of Birth"]],
         use_container_width=True,
         height=420,
         num_rows="dynamic",
@@ -899,13 +795,8 @@ with tabs[5]:
         if st.button("💾 Save table changes", use_container_width=True):
             try:
                 edited_df = edited.copy().fillna("").astype(str)
-
-                # ✅ Keep only required columns, in correct order
-                edited_df = edited_df[["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]]
-
-                # ✅ Remove completely empty rows (barcode blank)
+                edited_df = edited_df[["Barcode","Name","Surname","Grade","Area","Date Of Birth"]]
                 edited_df = edited_df[edited_df["Barcode"].astype(str).str.strip() != ""]
-
                 replace_learners_from_df(db_path, edited_df)
                 st.success("✅ Table saved to database.")
                 st.rerun()
@@ -918,7 +809,6 @@ with tabs[5]:
 
     st.divider()
 
-    # ------------------ Add / Update a learner ------------------
     st.markdown("### ➕ Add / Update a learner (by barcode)")
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -949,7 +839,6 @@ with tabs[5]:
 
     st.divider()
 
-    # ------------------ Delete learner ------------------
     st.markdown("### 🗑 Delete learner by barcode")
     del_code = st.text_input("Barcode to delete", key="del_code")
     if st.button("Delete learner", use_container_width=True):
@@ -965,10 +854,8 @@ with tabs[5]:
 
     st.divider()
 
-    # ------------------ CSV import / replace ------------------
     st.markdown("### 📤 Import / Replace learners from CSV (attendance_clean.csv format)")
     st.caption("Upload CSV with columns: Name, Surname, Barcode, Grade, Area, Date Of Birth")
-
     up = st.file_uploader("Upload CSV", type=["csv"], key="csv_up")
     if up is not None:
         try:
@@ -982,7 +869,6 @@ with tabs[5]:
                 for c in ["Grade", "Area", "Date Of Birth"]:
                     if c not in imp.columns:
                         imp[c] = ""
-
                 imp = imp[["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]]
                 st.dataframe(imp.head(20), use_container_width=True)
 
@@ -996,7 +882,6 @@ with tabs[5]:
 
     st.divider()
 
-    # ------------------ WhatsApp Test ------------------
     st.markdown("### 💬 WhatsApp Test (manual send)")
     test_msg = st.text_area(
         "Message",
@@ -1016,36 +901,3 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
