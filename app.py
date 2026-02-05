@@ -622,22 +622,27 @@ with tabs[1]:
     df_learners = standardize_dob_column(df_learners)
 
     # ✅ Always ensure the other columns exist too (prevents KeyError)
-    for c in ["Name", "Surname", "Grade"]:
+    for c in ["Name", "Surname", "Grade", "Date Of Birth"]:
         if c not in df_learners.columns:
             df_learners[c] = ""
 
     # ✅ Convert values to safe strings
     df_learners = df_learners.fillna("").astype(str)
 
+    # ✅ Optional: clean DOB formats (helps birthdays show reliably)
+    # Example inputs that will still work: "25-Apr-14", "25-April-14", "5-Feb-15", "31-Jan-13", etc.
+    df_learners["Date Of Birth"] = df_learners["Date Of Birth"].str.strip()
+
     # ✅ Debug counters
     dob_filled = (df_learners["Date Of Birth"].str.strip() != "").sum()
     st.caption(f"📌 Learners loaded: {len(df_learners)}")
     st.caption(f"📌 Learners with DOB filled: {dob_filled}")
 
-    # ✅ Debug preview (SAFE – no KeyError)
+    # ✅ Debug preview (never crash even if columns change)
     with st.expander("🔍 Debug: Preview learner columns + DOB values (first 15)"):
         st.write("Columns:", list(df_learners.columns))
-        st.dataframe(df_learners[["Name", "Surname", "Grade", "Date Of Birth"]].head(15), use_container_width=True)
+        preview_cols = [c for c in ["Name", "Surname", "Grade", "Date Of Birth"] if c in df_learners.columns]
+        st.dataframe(df_learners[preview_cols].head(15), use_container_width=True)
 
     # ✅ Birthdays
     birthdays = get_birthdays_for_week(df_learners)
@@ -647,13 +652,15 @@ with tabs[1]:
         for b in birthdays:
             full_name = f"{b.get('Name','')} {b.get('Surname','')}".strip()
             grade = b.get("Grade", "")
-            tag = "🎉 Happy Birthday" if b["Kind"] == "today" else ("🎂 Belated" if b["Kind"] == "belated" else "🎁 Upcoming")
+            kind = b.get("Kind", "")
+            tag = "🎉 Happy Birthday" if kind == "today" else ("🎂 Belated" if kind == "belated" else "🎁 Upcoming")
             extra = f" (Grade {grade})" if grade else ""
             st.write(f"{tag}: {full_name}{extra} — DOB: {b.get('DOB','')}")
     else:
         st.caption("No birthdays this week or in the next 7 days.")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 # ------------------ GRADES TAB ------------------
@@ -892,6 +899,7 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
