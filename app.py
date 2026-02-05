@@ -867,59 +867,22 @@ with tabs[4]:
 
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ------------------ MANAGE TAB ------------------
+from db import add_or_update_learner, get_learners_df, delete_learner_by_barcode, replace_learners_from_df
 
+# ------------------ MANAGE TAB ------------------
 with tabs[5]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Manage Learners / Barcodes")
 
-    # ✅ Load learners (already normalized from db.py)
-    df = get_learners_df(db_path)
+    df = get_learners_df(db_path).fillna("").astype(str)
 
-    # Safety: ensure columns exist
-    for c in ["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]:
-        if c not in df.columns:
-            df[c] = ""
-
-    df = df.fillna("").astype(str)
-
-    st.markdown("### ✅ Current learners (Editable)")
-    st.caption("Edit directly in the table, then click **Save changes**.")
-
-    edited = st.data_editor(
-        df,
-        use_container_width=True,
-        height=380,
-        num_rows="dynamic",   # ✅ allows adding/removing rows
-        key="learners_editor"
-    )
-
-    colA, colB = st.columns(2)
-
-    with colA:
-        if st.button("💾 Save changes", type="primary", use_container_width=True):
-            # ✅ basic validation: barcode must exist
-            edited = edited.fillna("").astype(str)
-            edited["Barcode"] = edited["Barcode"].astype(str).str.strip()
-
-            if (edited["Barcode"] == "").any():
-                st.error("❌ Every learner must have a Barcode. Remove blank rows or fill barcodes.")
-            else:
-                # ✅ Save to DB (replaces learners table only)
-                replace_learners_from_df(db_path, edited)
-                st.success("✅ Saved successfully!")
-                st.rerun()
-
-    with colB:
-        if st.button("🔄 Reload from database", use_container_width=True):
-            st.rerun()
+    st.markdown("### ✅ Current learners")
+    st.dataframe(df, use_container_width=True, height=320)
 
     st.divider()
-
-    # ✅ OPTIONAL: Quick add / update form (safe, doesn’t wipe DB)
-    st.markdown("### ➕ Add / Update a learner (quick form)")
-
+    st.markdown("### ➕ Add / Update a learner")
     c1, c2, c3 = st.columns(3)
+
     with c1:
         new_name = st.text_input("Name", key="new_name")
         new_surname = st.text_input("Surname", key="new_surname")
@@ -930,24 +893,23 @@ with tabs[5]:
         new_area = st.text_input("Area", key="new_area")
         new_dob = st.text_input("Date Of Birth (e.g. 31-Jan-13)", key="new_dob")
 
-    if st.button("Add / Update learner", use_container_width=True):
+    if st.button("Save learner", use_container_width=True):
         if not new_barcode.strip():
             st.error("Barcode is required.")
         else:
             add_or_update_learner(
-                db_path,
-                new_barcode.strip(),
-                new_name.strip(),
-                new_surname.strip(),
-                new_grade.strip(),
-                new_area.strip(),
-                new_dob.strip()
+                db_path=db_path,
+                barcode=new_barcode,
+                name=new_name,
+                surname=new_surname,
+                grade=new_grade,
+                area=new_area,
+                dob=new_dob
             )
-            st.success("✅ Learner added/updated")
+            st.success("✅ Learner saved to database.")
             st.rerun()
 
     st.divider()
-
     st.markdown("### 🗑 Delete learner by barcode")
     del_code = st.text_input("Barcode to delete", key="del_code")
     if st.button("Delete learner", use_container_width=True):
@@ -962,6 +924,7 @@ with tabs[5]:
                 st.warning("Barcode not found.")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
