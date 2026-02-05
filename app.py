@@ -77,23 +77,25 @@ META_WA_API_VERSION = os.environ.get("META_WA_API_VERSION", "v22.0").strip()
 
 # ------------------ UTILITIES ------------------
 
-from datetime import datetime
+import re
+from datetime import datetime, timedelta, time as dtime
 import pandas as pd
 
 def now_local() -> datetime:
+    """Current datetime in the app timezone."""
     return datetime.now(TZ)
 
 def today_labels():
     """
     Returns:
-      date_col:  e.g. '2-Feb' (used as the attendance column label)
+      date_col:  e.g. '2-Feb' (attendance column label)
       date_str:  'YYYY-MM-DD'
       time_str:  'HH:MM:SS'
       ts:        ISO timestamp
     """
     n = now_local()
-    day = str(int(n.strftime("%d")))          # removes leading zeros
-    mon = n.strftime("%b")                    # Jan, Feb, Mar...
+    day = str(int(n.strftime("%d")))     # removes leading zeros
+    mon = n.strftime("%b")              # Jan, Feb, Mar...
     date_col = f"{day}-{mon}"
     date_str = n.strftime("%Y-%m-%d")
     time_str = n.strftime("%H:%M:%S")
@@ -104,40 +106,52 @@ def today_col_label() -> str:
     return today_labels()[0]
 
 def is_saturday_class_day() -> bool:
-    # Monday=0 ... Saturday=5 ... Sunday=6
+    """Monday=0 ... Saturday=5 ... Sunday=6"""
     return now_local().weekday() == 5
 
 def should_auto_send(now: datetime) -> bool:
+    """Auto-send WhatsApp after the configured time on the configured day."""
     return (now.weekday() == SEND_DAY_WEEKDAY) and (now.time() >= SEND_AFTER_TIME)
 
 def label_for_row(r: pd.Series) -> str:
+    """Nice label for a learner row."""
     name = str(r.get("Name", "")).strip()
     surname = str(r.get("Surname", "")).strip()
     full = (name + " " + surname).strip()
-    if full:
-        return full
-    return str(r.get("Barcode", "")).strip()
+    return full or str(r.get("Barcode", "")).strip()
+
+def _looks_like_date_label(x: str) -> bool:
+    """
+    True if looks like '2-Feb', '14-Jun', etc.
+    Accepts 1-2 digit day + '-' + 3-letter month.
+    """
+    s = str(x).strip()
+    return bool(re.match(r"^\d{1,2}-[A-Za-z]{3}$", s))
 
 def get_date_columns(df: pd.DataFrame) -> list[str]:
     """
-    Finds columns that look like attendance labels: '2-Feb', '14-Jun', etc.
-    Sort them by month/day (within a year). If parse fails, keep them last.
+    Finds attendance date columns like '2-Feb', '14-Jun' and sorts them by
+    month/day consistently (using a dummy year).
     """
+    if df is None or df.empty:
+        return []
+
     cols = []
     for c in df.columns:
         c_str = str(c).strip()
-        parts = c_str.split("-")
-        if len(parts) == 2 and parts[0].isdigit() and 1 <= len(parts[0]) <= 2:
+        if _looks_like_date_label(c_str):
             cols.append(c_str)
 
     def _key(x: str):
         try:
-            # Use a dummy year so sorting is consistent
+            # dummy year for consistent sorting
             return datetime.strptime("2000-" + x, "%Y-%d-%b")
         except Exception:
             return datetime.max
 
-    return sorted(cols, key=_key)
+    # remove duplicates, keep stable sorting
+    cols = sorted(set(cols), key=_key)
+    return cols
 
 def unique_sorted(series: pd.Series, include_all: bool = True) -> list[str]:
     """
@@ -150,12 +164,43 @@ def unique_sorted(series: pd.Series, include_all: bool = True) -> list[str]:
     vals = []
     for v in series.astype(str).unique():
         s = str(v).strip()
-        if not s or s.lower() == "nan":
+        if not s or s.lower() in {"nan", "none", "null"}:
             continue
         vals.append(s)
 
     vals = sorted(set(vals))
     return (["(All)"] + vals) if include_all else vals
+
+# ------------------ DOB helpers (used by Birthdays) ------------------
+
+def parse_dob(dob_str: str):
+    """
+    Parse DOB safely from many common formats.
+    Returns a date or None.
+    """
+    s = str(dob_str).strip()
+    if not s or s.lower() in {"nan", "none", "null"}:
+        return None
+
+    s = s.replace("\\", "/").replace(".", "/")
+    s = " ".join(s.split())  # collapse extra spaces
+
+    formats = [
+        "%d-%b-%y", "%d-%b-%Y",     # 31-Jan-13 / 31-Jan-2013
+        "%d/%m/%Y", "%d/%m/%y",     # 31/01/2013 / 31/01/13
+        "%Y-%m-%d",                 # 2013-01-31
+        "%Y/%m/%d",                 # 2013/01/31
+        "%d %b %Y", "%d %B %Y",     # 31 Jan 2013 / 31 January 2013
+        "%d %b %y", "%d %B %y",     # 31 Jan 13
+    ]
+
+    for fmt in formats:
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+
+    return None
 
 
 # ------------------ PERMANENT BACKUP ------------------
@@ -617,36 +662,37 @@ with tabs[1]:
     today_col, _, _, _ = today_labels()
     st.subheader(f"Today's Attendance — {today_col}")
 
-    # ✅ Load learners
-    df_learners = get_learners_df(db_path)
+    df_learners = get_learners_df(db_path).fillna("").astype(str)
 
-    # ✅ Standardize DOB column name so the app never crashes
-    df_learners = standardize_dob_column(df_learners)
-
-    # ✅ Always ensure the other columns exist too (prevents KeyError)
+    # Ensure required columns exist
     for c in ["Name", "Surname", "Grade", "Date Of Birth"]:
         if c not in df_learners.columns:
             df_learners[c] = ""
 
-    # ✅ Convert values to safe strings
-    df_learners = df_learners.fillna("").astype(str)
-
-    # ✅ Optional: clean DOB formats (helps birthdays show reliably)
-    # Example inputs that will still work: "25-Apr-14", "25-April-14", "5-Feb-15", "31-Jan-13", etc.
-    df_learners["Date Of Birth"] = df_learners["Date Of Birth"].str.strip()
-
-    # ✅ Debug counters
-    dob_filled = (df_learners["Date Of Birth"].str.strip() != "").sum()
-    st.caption(f"📌 Learners loaded: {len(df_learners)}")
-    st.caption(f"📌 Learners with DOB filled: {dob_filled}")
-
-    # ✅ Debug preview (never crash even if columns change)
-    with st.expander("🔍 Debug: Preview learner columns + DOB values (first 15)"):
+    # --- DEBUG PANEL (shows what the DB really contains) ---
+    with st.expander("🔍 Debug birthdays (click to open)"):
         st.write("Columns:", list(df_learners.columns))
-        preview_cols = [c for c in ["Name", "Surname", "Grade", "Date Of Birth"] if c in df_learners.columns]
-        st.dataframe(df_learners[preview_cols].head(15), use_container_width=True)
+        st.write("Learners loaded:", len(df_learners))
 
-    # ✅ Birthdays
+        dob_non_empty = (df_learners["Date Of Birth"].str.strip() != "").sum()
+        st.write("DOB filled count:", int(dob_non_empty))
+
+        st.write("First 20 DOB values:")
+        st.dataframe(
+            df_learners[["Name", "Surname", "Grade", "Date Of Birth"]].head(20),
+            use_container_width=True
+        )
+
+        # show which DOBs can be parsed
+        parsed_preview = df_learners.copy()
+        parsed_preview["DOB_parsed"] = parsed_preview["Date Of Birth"].apply(parse_dob).astype(str)
+        st.write("Parsed DOB preview (first 20):")
+        st.dataframe(
+            parsed_preview[["Name", "Surname", "Date Of Birth", "DOB_parsed"]].head(20),
+            use_container_width=True
+        )
+
+    # --- BIRTHDAYS LOGIC ---
     birthdays = get_birthdays_for_week(df_learners)
 
     if birthdays:
@@ -654,14 +700,14 @@ with tabs[1]:
         for b in birthdays:
             full_name = f"{b.get('Name','')} {b.get('Surname','')}".strip()
             grade = b.get("Grade", "")
-            kind = b.get("Kind", "")
-            tag = "🎉 Happy Birthday" if kind == "today" else ("🎂 Belated" if kind == "belated" else "🎁 Upcoming")
+            tag = "🎉 Happy Birthday" if b["Kind"] == "today" else ("🎂 Belated" if b["Kind"] == "belated" else "🎁 Upcoming")
             extra = f" (Grade {grade})" if grade else ""
             st.write(f"{tag}: {full_name}{extra} — DOB: {b.get('DOB','')}")
     else:
-        st.caption("No birthdays this week or in the next 7 days.")
+        st.warning("No birthdays found. Open the Debug panel above to see if DOB is empty or not parsing.")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
@@ -913,6 +959,7 @@ with tabs[5]:
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
