@@ -175,20 +175,21 @@ def init_db(db_path: Path):
 
 
 # ------------------ LEARNERS ------------------
-
 def get_learners_df(db_path: Path) -> pd.DataFrame:
-    """Return learners table as a clean DataFrame with 'Date Of Birth' column."""
     con = _connect(db_path)
     try:
         df = pd.read_sql("SELECT * FROM learners", con)
     finally:
         con.close()
 
-    # DB uses Date_Of_Birth
-    if not df.empty and "Date_Of_Birth" in df.columns:
+    if df.empty:
+        return pd.DataFrame(columns=["Barcode","Name","Surname","Grade","Area","Date Of Birth"])
+
+    if "Date_Of_Birth" in df.columns and "Date Of Birth" not in df.columns:
         df = df.rename(columns={"Date_Of_Birth": "Date Of Birth"})
 
     return _normalize_learner_columns(df)
+
 
 def replace_learners_from_df(db_path: Path, df: pd.DataFrame):
     """
@@ -430,3 +431,4 @@ def seed_learners_from_csv_if_empty(db_path: Path, csv_path: str):
 
     csv_df = csv_df[["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]]
     replace_learners_from_df(db_path, csv_df)
+
