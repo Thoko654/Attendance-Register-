@@ -19,26 +19,34 @@ def _connect(db_path: Path):
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return sqlite3.connect(str(db_path), check_same_thread=False)
 
-def _table_columns(con, table: str) -> set[str]:
-    """Return a set of column names for a table."""
+def _table_columns_lower(con, table: str) -> set[str]:
+    """Return a set of LOWERCASED column names for a table."""
     cur = con.cursor()
     cur.execute(f"PRAGMA table_info({table})")
-    rows = cur.fetchall()  # (cid, name, type, notnull, dflt_value, pk)
-    return {r[1] for r in rows}
+    rows = cur.fetchall()
+    return {str(r[1]).strip().lower() for r in rows}
 
 def _ensure_learners_schema(con):
     """
     Upgrade existing learners table if it was created with an older schema.
-    Prevents OperationalError when INSERT expects missing columns.
+    Uses lowercase comparison to avoid 'Area' vs 'area' duplicate errors.
     """
-    cols = _table_columns(con, "learners")
+    cols = _table_columns_lower(con, "learners")
 
-    # If someone created older table without these columns, add them.
-    if "Area" not in cols:
-        con.execute("ALTER TABLE learners ADD COLUMN Area TEXT")
+    # Add Area column if missing (case-insensitive)
+    if "area" not in cols:
+        try:
+            con.execute("ALTER TABLE learners ADD COLUMN Area TEXT")
+        except sqlite3.OperationalError:
+            pass
 
-    if "Date_Of_Birth" not in cols:
-        con.execute("ALTER TABLE learners ADD COLUMN Date_Of_Birth TEXT")
+    # Add Date_Of_Birth column if missing (case-insensitive)
+    if "date_of_birth" not in cols:
+        try:
+            con.execute("ALTER TABLE learners ADD COLUMN Date_Of_Birth TEXT")
+        except sqlite3.OperationalError:
+            pass
+
 
 def _normalize_learner_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -421,3 +429,4 @@ def seed_learners_from_csv_if_empty(db_path: Path, csv_path: str):
 
     csv_df = csv_df[["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]]
     replace_learners_from_df(db_path, csv_df)
+
