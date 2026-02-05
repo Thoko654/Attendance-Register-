@@ -845,8 +845,8 @@ with tabs[5]:
                 "Date Of Birth": new_dob.strip(),
             }
     upsert_learner(db_path, barcode, name, surname, grade, area, dob)
-st.success("✅ Learner added/updated")
-st.rerun()
+    st.success("✅ Learner added/updated")
+    st.rerun()
 
     st.divider()
     st.markdown("### 🗑 Delete learner by barcode")
@@ -899,6 +899,7 @@ st.rerun()
             st.error(f"❌ Failed. {info}")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
