@@ -33,7 +33,7 @@ from db import (
 
 # ------------------ DOB NORMALIZER ------------------
 
-def standardize_dob_column(df):
+def standardize_dob_column(df)
     """Make sure df has a 'Date Of Birth' column (spaces), even if DB uses Date_Of_Birth."""
     if df is None or df.empty:
         return df
@@ -962,6 +962,7 @@ with tabs[5]:
                 st.warning("Barcode not found.")
 
     st.markdown('</div>', unsafe_allow_html=True)
+
 
 
 
