@@ -223,7 +223,7 @@ def unique_sorted(series: pd.Series):
     return ["(All)"] + vals
 
 def get_present_absent(df, date_col, grade=None, area=None):
-    # Safety: if the date column does not exist, create it
+    # Absolute safety: ensure the date column exists
     if date_col not in df.columns:
         df[date_col] = ""
 
@@ -241,6 +241,7 @@ def get_present_absent(df, date_col, grade=None, area=None):
     absent = subset[subset[date_col].astype(str) != "1"]
 
     return present, absent
+
 
 # ------------------ STORAGE: SHEET + LOG + SENT STATE ------------------
 def load_sheet_from_storage() -> pd.DataFrame:
@@ -1171,6 +1172,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
 
 
