@@ -513,16 +513,21 @@ main .block-container { padding-top: 0.8rem; padding-bottom: 1.5rem; }
 }
 </style>
 """, unsafe_allow_html=True)
-# --- CENTERED HEADER (ONE header only) ---
-logo_path = "tzu_chi_logo.png"
+
+import base64
+
+def img_to_base64(path: str) -> str:
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode()
 
 st.markdown('<div class="section-card">', unsafe_allow_html=True)
 
 logo_html = ""
-if Path(logo_path).exists():
+if Path("tzu_chi_logo.png").exists():
+    b64 = img_to_base64("tzu_chi_logo.png")
     logo_html = f"""
     <div style="display:flex; justify-content:center; align-items:center; margin-top:6px;">
-        <img src="{logo_path}" style="width:160px; height:auto;" />
+        <img src="data:image/png;base64,{b64}" style="width:160px; height:auto;" />
     </div>
     """
 
@@ -554,8 +559,6 @@ st.markdown(
 )
 
 st.markdown("</div>", unsafe_allow_html=True)
-
-
 
 with st.sidebar:
     st.header("Settings")
@@ -988,4 +991,5 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
