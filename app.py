@@ -222,25 +222,23 @@ def unique_sorted(series: pd.Series):
     vals = sorted([v for v in series.astype(str).unique() if v.strip() != "" and v != "nan"])
     return ["(All)"] + vals
 
-def get_present_absent(df: pd.DataFrame, date_col: str, grade=None, area=None):
-    df = df.copy()
-    df.columns = [str(c).replace("\ufeff", "").strip() for c in df.columns]
-    date_col = str(date_col).strip()
+def get_present_absent(df, date_col, grade=None, area=None):
+    # Safety: if the date column does not exist, create it
+    if date_col not in df.columns:
+        df[date_col] = ""
 
     filt = pd.Series([True] * len(df))
+
     if grade and "Grade" in df.columns:
         filt &= df["Grade"].astype(str) == str(grade)
+
     if area and "Area" in df.columns:
         filt &= df["Area"].astype(str) == str(area)
 
     subset = df[filt].copy()
 
-    # 🔑 CRITICAL SAFETY FIX
-    if date_col not in subset.columns:
-        subset[date_col] = ""
-
-    present = subset[subset[date_col].astype(str).str.strip() == "1"]
-    absent = subset[subset[date_col].astype(str).str.strip() != "1"]
+    present = subset[subset[date_col].astype(str) == "1"]
+    absent = subset[subset[date_col].astype(str) != "1"]
 
     return present, absent
 
@@ -1173,6 +1171,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
 
 
