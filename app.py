@@ -486,24 +486,48 @@ def build_grades_export(df: pd.DataFrame, date_sel: str, grades: list[str], grad
 # ------------------ UI ------------------
 st.set_page_config(page_title="Tutor Class Attendance Register 2026", page_icon="✅", layout="wide")
 
-st.markdown(
-    """
+# --- CLEAN HEADER (replace your current title/logo section with this) ---
+st.markdown("""
 <style>
-.stat-card {padding: 12px 16px; border: 1px solid #eee; border-radius: 12px; background: #fafafa;}
-.kpi {font-size: 28px; font-weight: 700;}
-main .block-container { padding-top: 1.5rem; }
-.section-card {
-    background: #ffffff;
-    padding: 18px 22px;
-    border-radius: 16px;
-    border: 1px solid #e5e7eb;
-    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.04);
-    margin-bottom: 1.2rem;
-}
+/* Reduce empty space at the top */
+main .block-container { padding-top: 1.0rem; padding-bottom: 1.5rem; }
+
+/* Make tab bar tighter */
+.stTabs [data-baseweb="tab-list"] { gap: 8px; }
+
+/* Optional: make the warning banners less tall */
+.stAlert { padding-top: 6px; padding-bottom: 6px; }
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
+
+# Header layout
+h1, h2, h3 = st.columns([1, 3, 1])
+
+with h1:
+    if Path("tzu_chi_logo.png").exists():
+        st.image("tzu_chi_logo.png", width=90)
+
+with h2:
+    st.markdown(
+        f"""
+        <div style="text-align:left; padding-top:4px;">
+            <div style="font-size:34px; font-weight:800; line-height:1.1;">
+                Tutor Class Attendance Register 2026
+            </div>
+            <div style="margin-top:6px; font-size:14px; color:#6b7280;">
+                Today: <b>{today_col_label()}</b> · Timezone: <b>{APP_TZ}</b>
+            </div>
+            <div style="margin-top:8px; font-size:14px; color:#374151;">
+                📌 Scan learner barcodes to mark <b>IN / OUT</b> and track participation.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with h3:
+    st.write("")  # empty column (keeps the center nice)
+
 
 logo_col1, logo_col2, logo_col3 = st.columns([3, 2, 3])
 with logo_col2:
@@ -960,3 +984,4 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
