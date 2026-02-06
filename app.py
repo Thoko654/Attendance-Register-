@@ -1,5 +1,5 @@
 # app.py — Tutor Class Attendance Register 2026
-# Stable + Persist-safe + WhatsApp + downloads
+# Stable + Persist-safe + Meta WhatsApp Cloud API + downloads
 # Tabs: Scan • Today • Grades • History • Tracking • Manage
 
 import os
@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 import pandas as pd
 import altair as alt
+import requests
+
 
 # ------------------ CONFIG ------------------
 APP_TZ = os.environ.get("APP_TIMEZONE", "Africa/Johannesburg")
@@ -20,6 +22,7 @@ TZ = ZoneInfo(APP_TZ)
 
 CSV_DEFAULT = "attendance_clean.csv"
 
+# WhatsApp recipients (you can keep these here OR move to secrets/env)
 WHATSAPP_RECIPIENTS = [
     "+27836280453",
     "+27672291308",
@@ -31,10 +34,10 @@ SEND_WINDOW_HOURS = 12
 
 DEFAULT_GRADE_CAPACITY = 20
 
-try:
-    from twilio.rest import Client
-except Exception:
-    Client = None
+# Meta WhatsApp Cloud API (from Streamlit secrets / environment variables)
+META_WA_TOKEN = os.environ.get("META_WA_TOKEN", "")
+META_WA_API_VERSION = os.environ.get("META_WA_API_VERSION", "v22.0")
+META_WA_PHONE_NUMBER_ID = os.environ.get("META_WA_PHONE_NUMBER_ID", "")
 
 
 # ------------------ UTILITIES ------------------
@@ -73,6 +76,10 @@ def _norm(code: str) -> str:
     s = s.lstrip("0")
     return s if s != "" else "0"
 
+def _norm_phone(num: str) -> str:
+    # Meta expects digits only, international format (no +, no spaces)
+    return "".join([c for c in str(num).strip() if c.isdigit()])
+
 @contextmanager
 def file_guard(_path: Path):
     attempts, last_err = 6, None
@@ -88,11 +95,9 @@ def file_guard(_path: Path):
 
 
 def ensure_base_columns(df: pd.DataFrame) -> pd.DataFrame:
-    # Ensure required columns exist (and keep all other columns)
-    for col in ["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"]:
+    for col in ["Barcode", "Name", "Surname", "Grade", "Area"]:
         if col not in df.columns:
             df[col] = ""
-    # Put Barcode first if exists
     cols = list(df.columns)
     if "Barcode" in cols:
         cols.insert(0, cols.pop(cols.index("Barcode")))
@@ -352,31 +357,52 @@ def build_birthday_message(birthdays: list[dict]) -> str:
     return "\n".join(lines)
 
 
-# ------------------ WHATSAPP (TWILIO) ------------------
+# ------------------ WHATSAPP (META CLOUD API) ------------------
+def meta_send_whatsapp_text(to_number: str, body: str) -> tuple[bool, str]:
+    """
+    Sends a WhatsApp text message via Meta WhatsApp Cloud API.
+    Requires META_WA_TOKEN, META_WA_PHONE_NUMBER_ID, META_WA_API_VERSION.
+    """
+    if not META_WA_TOKEN or not META_WA_PHONE_NUMBER_ID:
+        return False, "Missing META_WA_TOKEN or META_WA_PHONE_NUMBER_ID (check Streamlit secrets)."
+
+    to_clean = _norm_phone(to_number)
+    if not to_clean:
+        return False, f"Invalid recipient number: {to_number}"
+
+    url = f"https://graph.facebook.com/{META_WA_API_VERSION}/{META_WA_PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {META_WA_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_clean,
+        "type": "text",
+        "text": {"body": body, "preview_url": False},
+    }
+
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=30)
+        if r.status_code in (200, 201):
+            return True, "Sent successfully."
+        # Meta returns useful JSON error messages
+        try:
+            return False, f"Meta API error {r.status_code}: {r.json()}"
+        except Exception:
+            return False, f"Meta API error {r.status_code}: {r.text}"
+    except Exception as e:
+        return False, f"Request failed: {e}"
+
 def send_whatsapp_message(to_numbers: list[str], body: str) -> tuple[bool, str]:
-    if Client is None:
-        return False, "Twilio not installed. Add 'twilio' to requirements.txt."
-
-    sid = os.environ.get("TWILIO_ACCOUNT_SID", "")
-    token = os.environ.get("TWILIO_AUTH_TOKEN", "")
-    wa_from = os.environ.get("TWILIO_WHATSAPP_FROM", "")
-
-    if not sid or not token or not wa_from:
-        return False, "Missing TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_WHATSAPP_FROM."
-
-    client = Client(sid, token)
     sent_any = False
     errors = []
-
     for n in to_numbers:
-        n = n.strip()
-        if not n:
-            continue
-        try:
-            client.messages.create(from_=wa_from, to=f"whatsapp:{n}", body=body)
+        ok, info = meta_send_whatsapp_text(n, body)
+        if ok:
             sent_any = True
-        except Exception as e:
-            errors.append(f"{n}: {e}")
+        else:
+            errors.append(f"{n}: {info}")
 
     if sent_any and not errors:
         return True, "Sent successfully."
@@ -526,11 +552,7 @@ tabs = st.tabs(["📷 Scan", "📅 Today", "🏫 Grades", "📚 History", "📈 
 
 
 # ------------------ AUTO-SEND (Birthdays) ------------------
-# This will auto-send ONLY if:
-# - today is Saturday
-# - after 09:00 and within 12 hours window
-# - there are birthdays in this week/next 7 days
-# - and it hasn't sent already today (tracked by .whatsapp_sent_state.json)
+# NOTE: This only runs when the app is actually "awake" / being visited.
 try:
     df_auto = load_sheet(csv_path)
     birthdays = get_birthdays_for_week(df_auto)
@@ -552,7 +574,7 @@ with tabs[0]:
 
     df_scan = load_sheet(csv_path)
     today_col_scan = ensure_today_column(df_scan)
-    save_sheet(df_scan, csv_path)  # persist column creation
+    save_sheet(df_scan, csv_path)
 
     total_learners = len(df_scan)
     present_today = (df_scan[today_col_scan].astype(str) == "1").sum()
@@ -779,140 +801,152 @@ with tabs[4]:
 # ------------------ Manage Tab ------------------
 with tabs[5]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-    st.subheader("Manage Learners / Barcodes")
+    st.subheader("Manage")
 
     df = load_sheet(csv_path)
+    if "Date Of Birth" not in df.columns:
+        df["Date Of Birth"] = ""
 
-    # 1) TOP: Learner list (editable)
-    st.markdown("### ✏️ Learner list (editable)")
+    # 1) Learner list first (on top)
+    st.markdown("## Learner list (editable)")
     editable_cols = ["Name","Surname","Barcode","Grade","Area","Date Of Birth"]
-    df = ensure_base_columns(df)
-    edited = st.data_editor(df[editable_cols], use_container_width=True, num_rows="dynamic", key="data_editor_manage")
+    edited = st.data_editor(
+        df[editable_cols],
+        use_container_width=True,
+        num_rows="dynamic",
+        key="data_editor_manage"
+    )
 
-    save_col1, save_col2 = st.columns([1, 2])
-    with save_col1:
-        if st.button("💾 Save changes", use_container_width=True):
-            for c in editable_cols:
-                df[c] = edited[c].astype(str)
-            save_sheet(df, csv_path)
-            st.success("Saved ✅")
-            st.rerun()
-    with save_col2:
-        st.caption("Tip: You can also add rows at the bottom of the table, then click **Save changes**.")
+    if st.button("💾 Save changes (table)", use_container_width=True):
+        for c in editable_cols:
+            df[c] = edited[c].astype(str)
+        save_sheet(df, csv_path)
+        st.success("Saved ✅")
+        st.rerun()
 
     st.divider()
 
-    # 2) Manage learners: Add + Delete
-    st.markdown("### 👥 Manage learners (Add / Delete)")
-    add_col, del_col = st.columns(2)
+    # 2) Manage Learners (Add + Delete)
+    st.markdown("## Manage learners")
 
-    # ---- ADD learner ----
-    with add_col:
-        st.markdown("#### ➕ Add a new learner")
+    c1, c2 = st.columns(2, gap="large")
+
+    with c1:
+        st.markdown("### ➕ Add a new learner")
         with st.form("add_learner_form", clear_on_submit=True):
-            a_name = st.text_input("Name")
-            a_surname = st.text_input("Surname")
-            a_barcode = st.text_input("Barcode (must be unique)")
-            a_grade = st.text_input("Grade (e.g. 5)")
-            a_area = st.text_input("Area")
-            a_dob = st.text_input("Date Of Birth (optional)", placeholder="e.g. 2008-06-14 or 14/06/2008")
-            submitted = st.form_submit_button("Add learner ✅", use_container_width=True)
+            name = st.text_input("Name")
+            surname = st.text_input("Surname")
+            barcode = st.text_input("Barcode")
+            grade = st.text_input("Grade (e.g., 5)")
+            area = st.text_input("Area")
+            dob = st.text_input("Date Of Birth (optional)", help="Formats: 12-Jan-2012 or 12/01/2012 or 2012-01-12")
+            submitted = st.form_submit_button("Add learner ✅")
 
         if submitted:
-            a_barcode_clean = a_barcode.strip()
-            if not a_barcode_clean:
-                st.error("Barcode is required.")
+            barcode_clean = str(barcode).strip()
+            if not name.strip() or not barcode_clean:
+                st.error("Name and Barcode are required.")
             else:
-                df_latest = load_sheet(csv_path)
-                exists = (df_latest["Barcode"].astype(str).apply(_norm) == _norm(a_barcode_clean)).any()
+                # prevent duplicate barcode exact match (after normalization)
+                exists = df["Barcode"].astype(str).apply(_norm).eq(_norm(barcode_clean)).any()
                 if exists:
-                    st.error("That barcode already exists. Please use a different barcode.")
+                    st.error("This barcode already exists. Use the table to edit the existing learner.")
                 else:
                     new_row = {
-                        "Name": a_name.strip(),
-                        "Surname": a_surname.strip(),
-                        "Barcode": a_barcode_clean,
-                        "Grade": a_grade.strip(),
-                        "Area": a_area.strip(),
-                        "Date Of Birth": a_dob.strip(),
+                        "Barcode": barcode_clean,
+                        "Name": str(name).strip(),
+                        "Surname": str(surname).strip(),
+                        "Grade": str(grade).strip(),
+                        "Area": str(area).strip(),
+                        "Date Of Birth": str(dob).strip(),
                     }
-                    # Keep any date columns (attendance history) empty for the new learner
-                    for c in df_latest.columns:
+                    # ensure all date columns exist in row
+                    for c in df.columns:
                         if c not in new_row:
                             new_row[c] = ""
-                    df_latest = pd.concat([df_latest, pd.DataFrame([new_row])], ignore_index=True)
-                    df_latest = ensure_base_columns(df_latest)
-                    save_sheet(df_latest, csv_path)
+                    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                    save_sheet(df, csv_path)
                     st.success("Learner added ✅")
                     st.rerun()
 
-    # ---- DELETE learner ----
-    with del_col:
-        st.markdown("#### 🗑 Delete a learner")
-        df_latest = load_sheet(csv_path)
+    with c2:
+        st.markdown("### 🗑 Delete a learner")
+        delete_mode = st.radio("Delete by", ["Barcode", "Name"], horizontal=True, key="del_mode")
 
-        if df_latest.empty:
-            st.info("No learners to delete.")
-        else:
-            # Build labels for selection
-            df_latest["_label"] = df_latest.apply(lambda r: f"{label_for_row(r)}  •  [{str(r.get('Barcode','')).strip()}]", axis=1)
-            options = df_latest["_label"].tolist()
-            sel = st.selectbox("Select learner", options, key="del_sel")
-
-            confirm = st.checkbox("I understand this will permanently remove the learner.", key="del_confirm")
-            if st.button("Delete selected learner ❌", use_container_width=True, disabled=not confirm):
-                idx = df_latest.index[df_latest["_label"] == sel].tolist()
-                if not idx:
-                    st.error("Could not find that learner (please refresh).")
+        if delete_mode == "Barcode":
+            options = sorted([b for b in df["Barcode"].astype(str).unique() if b.strip() != ""])
+            pick = st.selectbox("Select Barcode to delete", ["(Select)"] + options)
+            if st.button("Delete selected learner", type="primary", use_container_width=True):
+                if pick == "(Select)":
+                    st.error("Please select a barcode.")
                 else:
-                    df_latest = df_latest.drop(index=idx[0]).reset_index(drop=True)
-                    df_latest = df_latest.drop(columns=["_label"], errors="ignore")
-                    save_sheet(df_latest, csv_path)
-                    st.success("Learner deleted ✅")
+                    before = len(df)
+                    df = df[df["Barcode"].astype(str).apply(_norm) != _norm(pick)].copy()
+                    after = len(df)
+                    save_sheet(df, csv_path)
+                    st.success(f"Deleted {before - after} record(s) ✅")
                     st.rerun()
+        else:
+            names = df.apply(lambda r: f"{str(r.get('Name','')).strip()} {str(r.get('Surname','')).strip()}  [{str(r.get('Barcode','')).strip()}]", axis=1).tolist()
+            pick = st.selectbox("Select learner to delete", ["(Select)"] + names)
+            if st.button("Delete selected learner", type="primary", use_container_width=True):
+                if pick == "(Select)":
+                    st.error("Please select a learner.")
+                else:
+                    # extract barcode between brackets [...]
+                    try:
+                        b = pick.split("[", 1)[1].split("]", 1)[0]
+                    except Exception:
+                        b = ""
+                    if not b:
+                        st.error("Could not read barcode from selection.")
+                    else:
+                        before = len(df)
+                        df = df[df["Barcode"].astype(str).apply(_norm) != _norm(b)].copy()
+                        after = len(df)
+                        save_sheet(df, csv_path)
+                        st.success(f"Deleted {before - after} record(s) ✅")
+                        st.rerun()
 
     st.divider()
 
-    # 3) Bottom: Dates + WhatsApp test (as you requested)
-    st.markdown("### 📅 Dates")
-    colA, colB, colC = st.columns([2, 1, 1])
+    # 3) Dates and WhatsApp test at the bottom
+    st.markdown("## Dates")
+    colA, colB, colC = st.columns([3, 2, 2])
     with colA:
         new_date = st.text_input("New date label (e.g., 19-Aug)", key="manage_newdate")
     with colB:
         if st.button("Add date column", use_container_width=True):
             if new_date.strip():
-                df2 = load_sheet(csv_path)
-                ensure_date_column(df2, new_date.strip())
-                save_sheet(df2, csv_path)
+                ensure_date_column(df, new_date.strip())
+                save_sheet(df, csv_path)
                 st.success(f"Added column {new_date.strip()} ✅")
                 st.rerun()
+            else:
+                st.error("Please enter a date label.")
     with colC:
         if st.button("➕ Add NEXT SATURDAY", use_container_width=True):
-            df2 = load_sheet(csv_path)
             ns = next_saturday_from()
-            if ns in df2.columns:
+            if ns in df.columns:
                 st.info(f"{ns} already exists.")
             else:
-                ensure_date_column(df2, ns)
-                save_sheet(df2, csv_path)
+                ensure_date_column(df, ns)
+                save_sheet(df, csv_path)
                 st.success(f"Added column {ns} ✅")
                 st.rerun()
 
     st.divider()
 
-    with st.expander("📩 WhatsApp Test (Twilio)", expanded=True):
-        if Client is None:
-            st.warning("Twilio is not installed. Add `twilio` to requirements.txt.")
-        else:
-            test_to = st.text_input("Test recipient number (E.164)", value=WHATSAPP_RECIPIENTS[0] if WHATSAPP_RECIPIENTS else "+27...")
-            test_msg = st.text_area("Message", value="Hello! This is a test message from the Tutor Class Attendance app ✅")
-
-            if st.button("Send Test WhatsApp", use_container_width=True):
-                ok, info = send_whatsapp_message([test_to], test_msg)
-                if ok:
-                    st.success(info)
-                else:
-                    st.error(info)
+    with st.expander("📩 WhatsApp Test (Meta Cloud API)", expanded=False):
+        st.caption("Uses META_WA_TOKEN + META_WA_PHONE_NUMBER_ID from Streamlit secrets.")
+        test_to = st.text_input("Test recipient number (E.164)", value=WHATSAPP_RECIPIENTS[0] if WHATSAPP_RECIPIENTS else "+27...")
+        test_msg = st.text_area("Message", value="Hello! This is a test message from the Tutor Class Attendance app ✅")
+        if st.button("Send Test WhatsApp", use_container_width=True):
+            ok, info = send_whatsapp_message([test_to], test_msg)
+            if ok:
+                st.success(info)
+            else:
+                st.error(info)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
