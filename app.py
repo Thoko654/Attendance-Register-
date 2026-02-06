@@ -235,11 +235,13 @@ def get_present_absent(df: pd.DataFrame, date_col: str, grade=None, area=None):
 
     subset = df[filt].copy()
 
+    # 🔑 CRITICAL SAFETY FIX
     if date_col not in subset.columns:
         subset[date_col] = ""
 
     present = subset[subset[date_col].astype(str).str.strip() == "1"]
     absent = subset[subset[date_col].astype(str).str.strip() != "1"]
+
     return present, absent
 
 # ------------------ STORAGE: SHEET + LOG + SENT STATE ------------------
@@ -1171,5 +1173,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
 
