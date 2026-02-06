@@ -44,7 +44,7 @@ SEND_DAY_WEEKDAY = 5          # Saturday
 SEND_AFTER_TIME = dtime(9, 0) # 09:00
 SEND_WINDOW_HOURS = 12
 
-DEFAULT_GRADE_CAPACITY = 20
+DEFAULT_GRADE_CAPACITY = 15
 
 # Meta WhatsApp Cloud API (from Streamlit secrets / environment variables)
 META_WA_TOKEN = get_secret("META_WA_TOKEN", "")
@@ -1158,3 +1158,4 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
