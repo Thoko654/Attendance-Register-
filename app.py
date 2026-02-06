@@ -223,8 +223,9 @@ def unique_sorted(series: pd.Series):
     return ["(All)"] + vals
 
 def get_present_absent(df: pd.DataFrame, date_col: str, grade=None, area=None):
-    if date_col not in df.columns:
-        return df.iloc[0:0].copy(), df.copy()
+    df = df.copy()
+    df.columns = [str(c).replace("\ufeff", "").strip() for c in df.columns]
+    date_col = str(date_col).strip()
 
     filt = pd.Series([True] * len(df))
     if grade and "Grade" in df.columns:
@@ -233,10 +234,13 @@ def get_present_absent(df: pd.DataFrame, date_col: str, grade=None, area=None):
         filt &= df["Area"].astype(str) == str(area)
 
     subset = df[filt].copy()
-    present = subset[subset[date_col].astype(str) == "1"]
-    absent = subset[subset[date_col].astype(str) != "1"]
-    return present, absent
 
+    if date_col not in subset.columns:
+        subset[date_col] = ""
+
+    present = subset[subset[date_col].astype(str).str.strip() == "1"]
+    absent = subset[subset[date_col].astype(str).str.strip() != "1"]
+    return present, absent
 
 # ------------------ STORAGE: SHEET + LOG + SENT STATE ------------------
 def load_sheet_from_storage() -> pd.DataFrame:
@@ -254,8 +258,11 @@ def load_sheet_from_storage() -> pd.DataFrame:
             text, sha = gh_read_text(GITHUB_FILE_PATH, GITHUB_BRANCH)
             st.session_state["_gh_sha_sheet"] = sha
 
+        
         df = pd.read_csv(StringIO(text), dtype=str).fillna("")
-        return ensure_base_columns(df)
+df.columns = [str(c).replace("\ufeff", "").strip() for c in df.columns]
+return ensure_base_columns(df)
+
 
     # fallback local
     csv_path = Path(CSV_DEFAULT)
@@ -1164,4 +1171,5 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
