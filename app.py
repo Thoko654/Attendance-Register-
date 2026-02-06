@@ -15,6 +15,83 @@ import pandas as pd
 import altair as alt
 import requests
 
+def gh_enabled() -> bool:
+    return bool(get_secret("GITHUB_TOKEN") and get_secret("GITHUB_REPO"))
+
+def gh_headers():
+    return {
+        "Authorization": f"Bearer {get_secret('GITHUB_TOKEN')}",
+        "Accept": "application/vnd.github+json",
+    }
+
+def gh_api_url(path: str) -> str:
+    repo = get_secret("GITHUB_REPO")
+    return f"https://api.github.com/repos/{repo}/contents/{path}"
+
+def gh_read_text(path: str, branch: str) -> tuple[str, str]:
+    """Return (text, sha). If missing, return ("", "")."""
+    r = requests.get(gh_api_url(path), headers=gh_headers(), params={"ref": branch}, timeout=30)
+    if r.status_code == 200:
+        data = r.json()
+        content = base64.b64decode(data["content"]).decode("utf-8")
+        return content, data["sha"]
+    if r.status_code == 404:
+        return "", ""
+    raise RuntimeError(f"GitHub read failed {r.status_code}: {r.text}")
+
+def gh_write_text(path: str, branch: str, text: str, sha: str | None):
+    payload = {
+        "message": f"Update {path}",
+        "content": base64.b64encode(text.encode("utf-8")).decode("utf-8"),
+        "branch": branch,
+    }
+    if sha:
+        payload["sha"] = sha
+
+    r = requests.put(gh_api_url(path), headers=gh_headers(), json=payload, timeout=30)
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"GitHub write failed {r.status_code}: {r.text}")
+
+def load_sheet_from_storage() -> pd.DataFrame:
+    csv_path = Path(CSV_DEFAULT)
+    branch = get_secret("GITHUB_BRANCH", "main")
+    gh_path = get_secret("GITHUB_FILE_PATH", "data/attendance_clean.csv")
+
+    # If GitHub is enabled, load from GitHub
+    if gh_enabled():
+        text, sha = gh_read_text(gh_path, branch)
+        st.session_state["_gh_sha"] = sha
+
+        if not text.strip():
+            # create empty CSV in GitHub if missing
+            empty = "Barcode,Name,Surname,Grade,Area,Date Of Birth\n"
+            gh_write_text(gh_path, branch, empty, sha=None)
+            st.session_state["_gh_sha"] = gh_read_text(gh_path, branch)[1]
+            df = pd.read_csv(pd.io.common.StringIO(empty), dtype=str).fillna("")
+        else:
+            df = pd.read_csv(pd.io.common.StringIO(text), dtype=str).fillna("")
+        return ensure_base_columns(df)
+
+    # fallback: local file
+    return load_sheet(csv_path)
+
+def save_sheet_to_storage(df: pd.DataFrame):
+    df = df.fillna("").astype(str)
+    branch = get_secret("GITHUB_BRANCH", "main")
+    gh_path = get_secret("GITHUB_FILE_PATH", "data/attendance_clean.csv")
+
+    if gh_enabled():
+        text = df.to_csv(index=False)
+        sha = st.session_state.get("_gh_sha", "")
+        gh_write_text(gh_path, branch, text, sha=sha)
+        # refresh sha after write
+        _, new_sha = gh_read_text(gh_path, branch)
+        st.session_state["_gh_sha"] = new_sha
+        return
+
+    # fallback local
+    save_sheet(df, Path(CSV_DEFAULT))
+
 
 # ------------------ CONFIG ------------------
 APP_TZ = os.environ.get("APP_TIMEZONE", "Africa/Johannesburg")
@@ -991,5 +1068,6 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
 
