@@ -1,10 +1,12 @@
 # app.py — Tutor Class Attendance Register 2026
-# Stable + Persist-safe + Meta WhatsApp Cloud API + downloads
+# Stable + Persist-safe (GitHub Storage) + Meta WhatsApp Cloud API + downloads
 # Tabs: Scan • Today • Grades • History • Tracking • Manage
 
 import os
 import json
 import time
+import base64
+from io import StringIO
 from pathlib import Path
 from datetime import datetime, timedelta, time as dtime
 from contextlib import contextmanager
@@ -15,6 +17,48 @@ import pandas as pd
 import altair as alt
 import requests
 
+
+# ------------------ SECRETS / ENV ------------------
+def get_secret(key: str, default: str = "") -> str:
+    """Read from Streamlit secrets first, then env vars."""
+    try:
+        if key in st.secrets:
+            return str(st.secrets.get(key, default))
+    except Exception:
+        pass
+    return str(os.environ.get(key, default))
+
+
+# ------------------ CONFIG ------------------
+APP_TZ = get_secret("APP_TIMEZONE", "Africa/Johannesburg")
+TZ = ZoneInfo(APP_TZ)
+
+CSV_DEFAULT = "attendance_clean.csv"
+
+WHATSAPP_RECIPIENTS = [
+    "+27836280453",
+    "+27672291308",
+]
+
+SEND_DAY_WEEKDAY = 5          # Saturday
+SEND_AFTER_TIME = dtime(9, 0) # 09:00
+SEND_WINDOW_HOURS = 12
+
+DEFAULT_GRADE_CAPACITY = 20
+
+# Meta WhatsApp Cloud API (from Streamlit secrets / environment variables)
+META_WA_TOKEN = get_secret("META_WA_TOKEN", "")
+META_WA_API_VERSION = get_secret("META_WA_API_VERSION", "v22.0")
+META_WA_PHONE_NUMBER_ID = get_secret("META_WA_PHONE_NUMBER_ID", "")
+
+# GitHub storage paths (recommended)
+GITHUB_BRANCH = get_secret("GITHUB_BRANCH", "main")
+GITHUB_FILE_PATH = get_secret("GITHUB_FILE_PATH", "data/attendance_clean.csv")
+GITHUB_LOG_PATH = get_secret("GITHUB_LOG_PATH", "data/attendance_log.csv")
+GITHUB_SENTSTATE_PATH = get_secret("GITHUB_SENTSTATE_PATH", "data/.whatsapp_sent_state.json")
+
+
+# ------------------ GITHUB STORAGE HELPERS ------------------
 def gh_enabled() -> bool:
     return bool(get_secret("GITHUB_TOKEN") and get_secret("GITHUB_REPO"))
 
@@ -39,9 +83,9 @@ def gh_read_text(path: str, branch: str) -> tuple[str, str]:
         return "", ""
     raise RuntimeError(f"GitHub read failed {r.status_code}: {r.text}")
 
-def gh_write_text(path: str, branch: str, text: str, sha: str | None):
+def gh_write_text(path: str, branch: str, text: str, sha: str | None, message: str):
     payload = {
-        "message": f"Update {path}",
+        "message": message,
         "content": base64.b64encode(text.encode("utf-8")).decode("utf-8"),
         "branch": branch,
     }
@@ -49,82 +93,20 @@ def gh_write_text(path: str, branch: str, text: str, sha: str | None):
         payload["sha"] = sha
 
     r = requests.put(gh_api_url(path), headers=gh_headers(), json=payload, timeout=30)
-    if r.status_code not in (200, 201):
-        raise RuntimeError(f"GitHub write failed {r.status_code}: {r.text}")
-
-def load_sheet_from_storage() -> pd.DataFrame:
-    csv_path = Path(CSV_DEFAULT)
-    branch = get_secret("GITHUB_BRANCH", "main")
-    gh_path = get_secret("GITHUB_FILE_PATH", "data/attendance_clean.csv")
-
-    # If GitHub is enabled, load from GitHub
-    if gh_enabled():
-        text, sha = gh_read_text(gh_path, branch)
-        st.session_state["_gh_sha"] = sha
-
-        if not text.strip():
-            # create empty CSV in GitHub if missing
-            empty = "Barcode,Name,Surname,Grade,Area,Date Of Birth\n"
-            gh_write_text(gh_path, branch, empty, sha=None)
-            st.session_state["_gh_sha"] = gh_read_text(gh_path, branch)[1]
-            df = pd.read_csv(pd.io.common.StringIO(empty), dtype=str).fillna("")
-        else:
-            df = pd.read_csv(pd.io.common.StringIO(text), dtype=str).fillna("")
-        return ensure_base_columns(df)
-
-    # fallback: local file
-    return load_sheet(csv_path)
-
-def save_sheet_to_storage(df: pd.DataFrame):
-    df = df.fillna("").astype(str)
-    branch = get_secret("GITHUB_BRANCH", "main")
-    gh_path = get_secret("GITHUB_FILE_PATH", "data/attendance_clean.csv")
-
-    if gh_enabled():
-        text = df.to_csv(index=False)
-        sha = st.session_state.get("_gh_sha", "")
-        gh_write_text(gh_path, branch, text, sha=sha)
-        # refresh sha after write
-        _, new_sha = gh_read_text(gh_path, branch)
-        st.session_state["_gh_sha"] = new_sha
+    if r.status_code in (200, 201):
         return
 
-    # fallback local
-    save_sheet(df, Path(CSV_DEFAULT))
+    # If SHA conflict (file changed), re-read latest SHA and retry once
+    if r.status_code == 409:
+        latest_text, latest_sha = gh_read_text(path, branch)
+        payload["sha"] = latest_sha if latest_sha else None
+        payload["content"] = base64.b64encode(text.encode("utf-8")).decode("utf-8")
+        r2 = requests.put(gh_api_url(path), headers=gh_headers(), json=payload, timeout=30)
+        if r2.status_code in (200, 201):
+            return
+        raise RuntimeError(f"GitHub write retry failed {r2.status_code}: {r2.text}")
 
-
-# ------------------ CONFIG ------------------
-APP_TZ = os.environ.get("APP_TIMEZONE", "Africa/Johannesburg")
-TZ = ZoneInfo(APP_TZ)
-
-CSV_DEFAULT = "attendance_clean.csv"
-
-WHATSAPP_RECIPIENTS = [
-    "+27836280453",
-    "+27672291308",
-]
-
-SEND_DAY_WEEKDAY = 5          # Saturday
-SEND_AFTER_TIME = dtime(9, 0) # 09:00
-SEND_WINDOW_HOURS = 12
-
-DEFAULT_GRADE_CAPACITY = 20
-
-
-def get_secret(key: str, default: str = "") -> str:
-    """Read from Streamlit secrets first, then env vars."""
-    try:
-        if key in st.secrets:
-            return str(st.secrets.get(key, default))
-    except Exception:
-        pass
-    return str(os.environ.get(key, default))
-
-
-# Meta WhatsApp Cloud API (from Streamlit secrets / environment variables)
-META_WA_TOKEN = get_secret("META_WA_TOKEN", "")
-META_WA_API_VERSION = get_secret("META_WA_API_VERSION", "v22.0")
-META_WA_PHONE_NUMBER_ID = get_secret("META_WA_PHONE_NUMBER_ID", "")
+    raise RuntimeError(f"GitHub write failed {r.status_code}: {r.text}")
 
 
 # ------------------ UTILITIES ------------------
@@ -179,6 +161,7 @@ def file_guard(_path: Path):
     if last_err:
         raise last_err
 
+
 def ensure_base_columns(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["Barcode", "Name", "Surname", "Grade", "Area"]:
         if col not in df.columns:
@@ -199,8 +182,7 @@ def load_sheet(csv_path: Path) -> pd.DataFrame:
         create_empty_csv(csv_path)
     with file_guard(csv_path):
         df = pd.read_csv(csv_path, dtype=str).fillna("")
-    df = ensure_base_columns(df)
-    return df
+    return ensure_base_columns(df)
 
 def save_sheet(df: pd.DataFrame, csv_path: Path):
     df = df.fillna("").astype(str)
@@ -256,21 +238,143 @@ def get_present_absent(df: pd.DataFrame, date_col: str, grade=None, area=None):
     return present, absent
 
 
-# ------------------ IN/OUT LOG ------------------
-def load_log(log_path: Path) -> pd.DataFrame:
+# ------------------ STORAGE: SHEET + LOG + SENT STATE ------------------
+def load_sheet_from_storage() -> pd.DataFrame:
+    # If GitHub enabled, load from GitHub
+    if gh_enabled():
+        text, sha = gh_read_text(GITHUB_FILE_PATH, GITHUB_BRANCH)
+        st.session_state["_gh_sha_sheet"] = sha
+
+        if not text.strip():
+            empty = "Barcode,Name,Surname,Grade,Area,Date Of Birth\n"
+            gh_write_text(
+                GITHUB_FILE_PATH, GITHUB_BRANCH, empty, sha=None,
+                message=f"Create {GITHUB_FILE_PATH}"
+            )
+            text, sha = gh_read_text(GITHUB_FILE_PATH, GITHUB_BRANCH)
+            st.session_state["_gh_sha_sheet"] = sha
+
+        df = pd.read_csv(StringIO(text), dtype=str).fillna("")
+        return ensure_base_columns(df)
+
+    # fallback local
+    csv_path = Path(CSV_DEFAULT)
+    return load_sheet(csv_path)
+
+def save_sheet_to_storage(df: pd.DataFrame):
+    df = df.fillna("").astype(str)
+
+    if gh_enabled():
+        text = df.to_csv(index=False)
+        sha = st.session_state.get("_gh_sha_sheet", "")
+        gh_write_text(
+            GITHUB_FILE_PATH, GITHUB_BRANCH, text, sha=sha or None,
+            message=f"Update {GITHUB_FILE_PATH}"
+        )
+        _, new_sha = gh_read_text(GITHUB_FILE_PATH, GITHUB_BRANCH)
+        st.session_state["_gh_sha_sheet"] = new_sha
+        return
+
+    # fallback local
+    save_sheet(df, Path(CSV_DEFAULT))
+
+def load_log_from_storage() -> pd.DataFrame:
+    columns = ["Timestamp","Date","Time","Barcode","Name","Surname","Action"]
+
+    if gh_enabled():
+        text, sha = gh_read_text(GITHUB_LOG_PATH, GITHUB_BRANCH)
+        st.session_state["_gh_sha_log"] = sha
+
+        if not text.strip():
+            empty = ",".join(columns) + "\n"
+            gh_write_text(
+                GITHUB_LOG_PATH, GITHUB_BRANCH, empty, sha=None,
+                message=f"Create {GITHUB_LOG_PATH}"
+            )
+            text, sha = gh_read_text(GITHUB_LOG_PATH, GITHUB_BRANCH)
+            st.session_state["_gh_sha_log"] = sha
+
+        df = pd.read_csv(StringIO(text), dtype=str).fillna("")
+        for c in columns:
+            if c not in df.columns:
+                df[c] = ""
+        return df[columns]
+
+    # fallback local
+    log_path = Path(CSV_DEFAULT).with_name("attendance_log.csv")
     if not log_path.exists():
-        return pd.DataFrame(columns=["Timestamp","Date","Time","Barcode","Name","Surname","Action"])
+        return pd.DataFrame(columns=columns)
     with file_guard(log_path):
         df = pd.read_csv(log_path, dtype=str).fillna("")
-    for col in ["Timestamp","Date","Time","Barcode","Name","Surname","Action"]:
-        if col not in df.columns:
-            df[col] = ""
-    return df
+    for c in columns:
+        if c not in df.columns:
+            df[c] = ""
+    return df[columns]
 
-def save_log(df: pd.DataFrame, log_path: Path):
+def save_log_to_storage(df: pd.DataFrame):
+    df = df.fillna("").astype(str)
+
+    if gh_enabled():
+        text = df.to_csv(index=False)
+        sha = st.session_state.get("_gh_sha_log", "")
+        gh_write_text(
+            GITHUB_LOG_PATH, GITHUB_BRANCH, text, sha=sha or None,
+            message=f"Update {GITHUB_LOG_PATH}"
+        )
+        _, new_sha = gh_read_text(GITHUB_LOG_PATH, GITHUB_BRANCH)
+        st.session_state["_gh_sha_log"] = new_sha
+        return
+
+    # fallback local
+    log_path = Path(CSV_DEFAULT).with_name("attendance_log.csv")
     with file_guard(log_path):
         df.to_csv(log_path, index=False)
 
+def already_sent_today_storage() -> bool:
+    if gh_enabled():
+        text, sha = gh_read_text(GITHUB_SENTSTATE_PATH, GITHUB_BRANCH)
+        st.session_state["_gh_sha_sent"] = sha
+        if not text.strip():
+            return False
+        try:
+            data = json.loads(text)
+            return data.get("date") == now_local().strftime("%Y-%m-%d")
+        except Exception:
+            return False
+
+    # fallback local
+    p = Path(CSV_DEFAULT).with_name(".whatsapp_sent_state.json")
+    if not p.exists():
+        return False
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data.get("date") == now_local().strftime("%Y-%m-%d")
+    except Exception:
+        return False
+
+def mark_sent_today_storage():
+    payload = {
+        "date": now_local().strftime("%Y-%m-%d"),
+        "ts": now_local().isoformat(timespec="seconds")
+    }
+    if gh_enabled():
+        text = json.dumps(payload, indent=2)
+        sha = st.session_state.get("_gh_sha_sent", "")
+        # If missing, sha can be None
+        gh_write_text(
+            GITHUB_SENTSTATE_PATH, GITHUB_BRANCH, text, sha=sha or None,
+            message=f"Update {GITHUB_SENTSTATE_PATH}"
+        )
+        _, new_sha = gh_read_text(GITHUB_SENTSTATE_PATH, GITHUB_BRANCH)
+        st.session_state["_gh_sha_sent"] = new_sha
+        return
+
+    # fallback local
+    p = Path(CSV_DEFAULT).with_name(".whatsapp_sent_state.json")
+    p.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+# ------------------ IN/OUT LOG LOGIC ------------------
 def determine_next_action(log_df: pd.DataFrame, barcode: str, date_str: str) -> str:
     norm_b = _norm(barcode)
     today_rows = log_df[
@@ -293,13 +397,13 @@ def get_currently_in(log_df: pd.DataFrame, date_str: str) -> pd.DataFrame:
     current_in = last_actions[last_actions["Action"].str.upper() == "IN"]
     return current_in[["Barcode","Name","Surname"]].reset_index(drop=True)
 
-def mark_scan_in_out(barcode: str, csv_path: Path, log_path: Path) -> tuple[bool, str]:
+def mark_scan_in_out(barcode: str) -> tuple[bool, str]:
     barcode = str(barcode).strip()
     if not barcode:
         return False, "Empty scan."
 
-    df = load_sheet(csv_path)
-    log_df = load_log(log_path)
+    df = load_sheet_from_storage()
+    log_df = load_log_from_storage()
 
     date_col, date_str, time_str, ts = today_labels()
     ensure_date_column(df, date_col)
@@ -330,15 +434,15 @@ def mark_scan_in_out(barcode: str, csv_path: Path, log_path: Path) -> tuple[bool
         log_df = pd.concat([log_df, pd.DataFrame([new_row])], ignore_index=True)
         msgs.append(f"{who} [{row_barcode}] marked {action} at {time_str} ({date_str}).")
 
-    save_sheet(df, csv_path)
-    save_log(log_df, log_path)
+    save_sheet_to_storage(df)
+    save_log_to_storage(log_df)
 
     current_in = get_currently_in(log_df, date_str)
     msgs.append("")
     msgs.append(f"Currently IN today ({date_str}): {len(current_in)}")
     for _, r in current_in.iterrows():
-        who = (str(r["Name"]).strip() + " " + str(r["Surname"]).strip()).strip() or f"[{r['Barcode']}]"
-        msgs.append(f"  • {who} [{r['Barcode']}]")
+        who2 = (str(r["Name"]).strip() + " " + str(r["Surname"]).strip()).strip() or f"[{r['Barcode']}]"
+        msgs.append(f"  • {who2} [{r['Barcode']}]")
 
     return True, "\n".join(msgs)
 
@@ -495,24 +599,6 @@ def should_send_now() -> bool:
     end_time = (datetime.combine(n.date(), SEND_AFTER_TIME, tzinfo=TZ) + timedelta(hours=SEND_WINDOW_HOURS)).time()
     return n.time() <= end_time
 
-def sent_state_path(base_csv: Path) -> Path:
-    return base_csv.with_name(".whatsapp_sent_state.json")
-
-def already_sent_today(base_csv: Path) -> bool:
-    p = sent_state_path(base_csv)
-    if not p.exists():
-        return False
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        return data.get("date") == now_local().strftime("%Y-%m-%d")
-    except Exception:
-        return False
-
-def mark_sent_today(base_csv: Path):
-    p = sent_state_path(base_csv)
-    data = {"date": now_local().strftime("%Y-%m-%d"), "ts": now_local().isoformat(timespec="seconds")}
-    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
-
 
 # ------------------ GRADES EXPORT ------------------
 def build_grades_export(df: pd.DataFrame, date_sel: str, grades: list[str], grade_capacity: int):
@@ -562,7 +648,6 @@ def build_grades_export(df: pd.DataFrame, date_sel: str, grades: list[str], grad
 # ------------------ UI ------------------
 st.set_page_config(page_title="Tutor Class Attendance Register 2026", page_icon="✅", layout="wide")
 
-# --- UI STYLES ---
 st.markdown("""
 <style>
 main .block-container { padding-top: 0.8rem; padding-bottom: 1.5rem; }
@@ -591,12 +676,11 @@ main .block-container { padding-top: 0.8rem; padding-bottom: 1.5rem; }
 </style>
 """, unsafe_allow_html=True)
 
-import base64
-
 def img_to_base64(path: str) -> str:
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode()
 
+# --- Center Header Card ---
 st.markdown('<div class="section-card">', unsafe_allow_html=True)
 
 logo_html = ""
@@ -604,7 +688,7 @@ if Path("tzu_chi_logo.png").exists():
     b64 = img_to_base64("tzu_chi_logo.png")
     logo_html = f"""
     <div style="display:flex; justify-content:center; align-items:center; margin-top:6px;">
-        <img src="data:image/png;base64,{b64}" style="width:160px; height:auto;" />
+        <img src="data:image/png;base64,{b64}" style="width:170px; height:auto;" />
     </div>
     """
 
@@ -634,7 +718,6 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
-
 st.markdown("</div>", unsafe_allow_html=True)
 
 with st.sidebar:
@@ -642,12 +725,24 @@ with st.sidebar:
     if Path("tzu_chi_logo.png").exists():
         st.image("tzu_chi_logo.png", use_container_width=True)
 
-    csv_path_str = st.text_input("CSV file path", CSV_DEFAULT, key="path_input")
-    csv_path = Path(csv_path_str).expanduser()
-    log_path = csv_path.with_name("attendance_log.csv")
+    st.markdown("### Storage Mode")
+    if gh_enabled():
+        st.success("GitHub storage ✅")
+        st.caption(f"Repo: {get_secret('GITHUB_REPO')}")
+        st.caption(f"Branch: {GITHUB_BRANCH}")
+        st.caption(f"Sheet: {GITHUB_FILE_PATH}")
+        st.caption(f"Log: {GITHUB_LOG_PATH}")
+    else:
+        st.warning("Local storage (may reset on redeploy) ⚠️")
+        st.caption("Add GitHub secrets to make data persistent.")
 
     st.markdown("### Grade capacity (benchmark)")
-    grade_capacity = st.number_input("Capacity per grade", min_value=1, max_value=200, value=DEFAULT_GRADE_CAPACITY, step=1)
+    grade_capacity = st.number_input(
+        "Capacity per grade",
+        min_value=1, max_value=200,
+        value=DEFAULT_GRADE_CAPACITY,
+        step=1
+    )
 
     st.markdown("### WhatsApp Recipients")
     st.write(WHATSAPP_RECIPIENTS)
@@ -663,15 +758,14 @@ tabs = st.tabs(["📷 Scan", "📅 Today", "🏫 Grades", "📚 History", "📈 
 
 
 # ------------------ AUTO-SEND (Birthdays) ------------------
-# NOTE: This only runs when the app is "awake" / visited.
 try:
-    df_auto = load_sheet(csv_path)
+    df_auto = load_sheet_from_storage()
     birthdays = get_birthdays_for_week(df_auto)
-    if birthdays and should_send_now() and not already_sent_today(csv_path):
+    if birthdays and should_send_now() and not already_sent_today_storage():
         msg = build_birthday_message(birthdays)
         ok, info = send_whatsapp_message(WHATSAPP_RECIPIENTS, msg)
         if ok:
-            mark_sent_today(csv_path)
+            mark_sent_today_storage()
             st.toast("WhatsApp birthday summary sent ✅", icon="✅")
         else:
             st.sidebar.warning(f"Auto WhatsApp not sent: {info}")
@@ -683,9 +777,9 @@ except Exception:
 with tabs[0]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
 
-    df_scan = load_sheet(csv_path)
+    df_scan = load_sheet_from_storage()
     today_col_scan = ensure_today_column(df_scan)
-    save_sheet(df_scan, csv_path)
+    save_sheet_to_storage(df_scan)
 
     total_learners = len(df_scan)
     present_today = (df_scan[today_col_scan].astype(str) == "1").sum()
@@ -708,7 +802,7 @@ with tabs[0]:
         if not is_saturday_class_day():
             st.error("Today is not a class day. Scans are only allowed on Saturdays.")
         else:
-            ok, msg = mark_scan_in_out(scan_value, csv_path, log_path)
+            ok, msg = mark_scan_in_out(scan_value)
             if ok:
                 st.success(msg)
             else:
@@ -717,7 +811,7 @@ with tabs[0]:
 
     st.text_input("Focus here and scan…", key="scan_box", label_visibility="collapsed", on_change=handle_scan)
 
-    log_df = load_log(log_path)
+    log_df = load_log_from_storage()
     _, date_str, _, _ = today_labels()
     current_in = get_currently_in(log_df, date_str)
     st.markdown(f"### Currently IN today ({date_str})")
@@ -734,9 +828,9 @@ with tabs[1]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader(f"Today's Attendance — {today_col_label()}")
 
-    df = load_sheet(csv_path)
+    df = load_sheet_from_storage()
     today_col = ensure_today_column(df)
-    save_sheet(df, csv_path)
+    save_sheet_to_storage(df)
 
     birthdays = get_birthdays_for_week(df)
     if birthdays:
@@ -806,7 +900,7 @@ with tabs[2]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Grade Attendance by Saturday")
 
-    df = load_sheet(csv_path)
+    df = load_sheet_from_storage()
     date_cols = get_date_columns(df)
     if not date_cols:
         st.info("No attendance dates yet.")
@@ -847,7 +941,7 @@ with tabs[3]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("History")
 
-    df = load_sheet(csv_path)
+    df = load_sheet_from_storage()
     date_cols = get_date_columns(df)
     if not date_cols:
         st.info("No attendance dates yet.")
@@ -855,7 +949,7 @@ with tabs[3]:
         date_sel = st.selectbox("Choose a date", list(reversed(date_cols)), key="history_date")
         cols = [c for c in ["Name","Surname","Barcode","Grade","Area",date_sel] if c in df.columns]
         view = df[cols].copy()
-        view["Status"] = view[date_sel].astype(str).apply(lambda x: "Present" if x.strip() == "1" else "Absent")
+        view["Status"] = df[date_sel].astype(str).apply(lambda x: "Present" if x.strip() == "1" else "Absent")
         view = view.drop(columns=[date_sel])
 
         st.dataframe(view.sort_values(by=["Status","Name","Surname"]), use_container_width=True, height=420)
@@ -870,7 +964,7 @@ with tabs[4]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Tracking (per learner)")
 
-    df = load_sheet(csv_path)
+    df = load_sheet_from_storage()
     date_cols = get_date_columns(df)
     if not date_cols:
         st.info("No attendance dates yet.")
@@ -914,11 +1008,10 @@ with tabs[5]:
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
     st.subheader("Manage")
 
-    df = load_sheet(csv_path)
+    df = load_sheet_from_storage()
     if "Date Of Birth" not in df.columns:
         df["Date Of Birth"] = ""
 
-    # 1) Learner list first (on top)
     st.markdown("## Learner list (editable)")
     editable_cols = ["Name","Surname","Barcode","Grade","Area","Date Of Birth"]
     edited = st.data_editor(
@@ -931,15 +1024,13 @@ with tabs[5]:
     if st.button("💾 Save changes (table)", use_container_width=True):
         for c in editable_cols:
             df[c] = edited[c].astype(str)
-        save_sheet(df, csv_path)
+        save_sheet_to_storage(df)
         st.success("Saved ✅")
         st.rerun()
 
     st.divider()
 
-    # 2) Manage Learners (Add + Delete)
     st.markdown("## Manage learners")
-
     c1, c2 = st.columns(2, gap="large")
 
     with c1:
@@ -974,7 +1065,7 @@ with tabs[5]:
                         if c not in new_row:
                             new_row[c] = ""
                     df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                    save_sheet(df, csv_path)
+                    save_sheet_to_storage(df)
                     st.success("Learner added ✅")
                     st.rerun()
 
@@ -992,7 +1083,7 @@ with tabs[5]:
                     before = len(df)
                     df = df[df["Barcode"].astype(str).apply(_norm) != _norm(pick)].copy()
                     after = len(df)
-                    save_sheet(df, csv_path)
+                    save_sheet_to_storage(df)
                     st.success(f"Deleted {before - after} record(s) ✅")
                     st.rerun()
         else:
@@ -1012,13 +1103,12 @@ with tabs[5]:
                         before = len(df)
                         df = df[df["Barcode"].astype(str).apply(_norm) != _norm(b)].copy()
                         after = len(df)
-                        save_sheet(df, csv_path)
+                        save_sheet_to_storage(df)
                         st.success(f"Deleted {before - after} record(s) ✅")
                         st.rerun()
 
     st.divider()
 
-    # 3) Dates and WhatsApp test at the bottom
     st.markdown("## Dates")
     colA, colB, colC = st.columns([3, 2, 2])
     with colA:
@@ -1027,7 +1117,7 @@ with tabs[5]:
         if st.button("Add date column", use_container_width=True):
             if new_date.strip():
                 ensure_date_column(df, new_date.strip())
-                save_sheet(df, csv_path)
+                save_sheet_to_storage(df)
                 st.success(f"Added column {new_date.strip()} ✅")
                 st.rerun()
             else:
@@ -1039,7 +1129,7 @@ with tabs[5]:
                 st.info(f"{ns} already exists.")
             else:
                 ensure_date_column(df, ns)
-                save_sheet(df, csv_path)
+                save_sheet_to_storage(df)
                 st.success(f"Added column {ns} ✅")
                 st.rerun()
 
@@ -1068,6 +1158,3 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
-
-
