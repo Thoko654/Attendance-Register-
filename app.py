@@ -51,11 +51,11 @@ META_WA_TOKEN = get_secret("META_WA_TOKEN", "")
 META_WA_API_VERSION = get_secret("META_WA_API_VERSION", "v22.0")
 META_WA_PHONE_NUMBER_ID = get_secret("META_WA_PHONE_NUMBER_ID", "")
 
-# GitHub storage paths (recommended)
+# ✅ FIX 1: GitHub default paths must match your repo (you have files in ROOT, not /data)
 GITHUB_BRANCH = get_secret("GITHUB_BRANCH", "main")
-GITHUB_FILE_PATH = get_secret("GITHUB_FILE_PATH", "data/attendance_clean.csv")
-GITHUB_LOG_PATH = get_secret("GITHUB_LOG_PATH", "data/attendance_log.csv")
-GITHUB_SENTSTATE_PATH = get_secret("GITHUB_SENTSTATE_PATH", "data/.whatsapp_sent_state.json")
+GITHUB_FILE_PATH = get_secret("GITHUB_FILE_PATH", "attendance_clean.csv")
+GITHUB_LOG_PATH = get_secret("GITHUB_LOG_PATH", "attendance_log.csv")
+GITHUB_SENTSTATE_PATH = get_secret("GITHUB_SENTSTATE_PATH", "whatsapp_sent_state.json")
 
 
 # ------------------ GITHUB STORAGE HELPERS ------------------
@@ -360,7 +360,6 @@ def mark_sent_today_storage():
     if gh_enabled():
         text = json.dumps(payload, indent=2)
         sha = st.session_state.get("_gh_sha_sent", "")
-        # If missing, sha can be None
         gh_write_text(
             GITHUB_SENTSTATE_PATH, GITHUB_BRANCH, text, sha=sha or None,
             message=f"Update {GITHUB_SENTSTATE_PATH}"
@@ -680,12 +679,15 @@ def img_to_base64(path: str) -> str:
     with open(path, "rb") as f:
         return base64.b64encode(f.read()).decode()
 
+# ✅ FIX 2: Your repo file is named "tzu_chi_logo.png" (not "tzu_chi_logo.png")
+LOGO_FILE = "tzu_chi_logo.png"
+
 # --- Center Header Card ---
 st.markdown('<div class="section-card">', unsafe_allow_html=True)
 
 logo_html = ""
-if Path("tzu_chi_logo.png").exists():
-    b64 = img_to_base64("tzu_chi_logo.png")
+if Path(LOGO_FILE).exists():
+    b64 = img_to_base64(LOGO_FILE)
     logo_html = f"""
     <div style="display:flex; justify-content:center; align-items:center; margin-top:6px;">
         <img src="data:image/png;base64,{b64}" style="width:170px; height:auto;" />
@@ -722,8 +724,8 @@ st.markdown("</div>", unsafe_allow_html=True)
 
 with st.sidebar:
     st.header("Settings")
-    if Path("tzu_chi_logo.png").exists():
-        st.image("tzu_chi_logo.png", use_container_width=True)
+    if Path(LOGO_FILE).exists():
+        st.image(LOGO_FILE, use_container_width=True)
 
     st.markdown("### Storage Mode")
     if gh_enabled():
@@ -755,6 +757,10 @@ with st.sidebar:
 
 
 tabs = st.tabs(["📷 Scan", "📅 Today", "🏫 Grades", "📚 History", "📈 Tracking", "🛠 Manage"])
+
+# (Everything else below stays exactly the same as your original code.)
+# ✅ Keep the rest of your file unchanged from here onward.
+
 
 
 # ------------------ AUTO-SEND (Birthdays) ------------------
@@ -1158,3 +1164,4 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
