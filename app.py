@@ -22,7 +22,6 @@ TZ = ZoneInfo(APP_TZ)
 
 CSV_DEFAULT = "attendance_clean.csv"
 
-# WhatsApp recipients (you can keep these here OR move to secrets/env)
 WHATSAPP_RECIPIENTS = [
     "+27836280453",
     "+27672291308",
@@ -34,10 +33,21 @@ SEND_WINDOW_HOURS = 12
 
 DEFAULT_GRADE_CAPACITY = 20
 
+
+def get_secret(key: str, default: str = "") -> str:
+    """Read from Streamlit secrets first, then env vars."""
+    try:
+        if key in st.secrets:
+            return str(st.secrets.get(key, default))
+    except Exception:
+        pass
+    return str(os.environ.get(key, default))
+
+
 # Meta WhatsApp Cloud API (from Streamlit secrets / environment variables)
-META_WA_TOKEN = os.environ.get("META_WA_TOKEN", "")
-META_WA_API_VERSION = os.environ.get("META_WA_API_VERSION", "v22.0")
-META_WA_PHONE_NUMBER_ID = os.environ.get("META_WA_PHONE_NUMBER_ID", "")
+META_WA_TOKEN = get_secret("META_WA_TOKEN", "")
+META_WA_API_VERSION = get_secret("META_WA_API_VERSION", "v22.0")
+META_WA_PHONE_NUMBER_ID = get_secret("META_WA_PHONE_NUMBER_ID", "")
 
 
 # ------------------ UTILITIES ------------------
@@ -77,7 +87,6 @@ def _norm(code: str) -> str:
     return s if s != "" else "0"
 
 def _norm_phone(num: str) -> str:
-    # Meta expects digits only, international format (no +, no spaces)
     return "".join([c for c in str(num).strip() if c.isdigit()])
 
 @contextmanager
@@ -93,7 +102,6 @@ def file_guard(_path: Path):
     if last_err:
         raise last_err
 
-
 def ensure_base_columns(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["Barcode", "Name", "Surname", "Grade", "Area"]:
         if col not in df.columns:
@@ -104,12 +112,10 @@ def ensure_base_columns(df: pd.DataFrame) -> pd.DataFrame:
         df = df[cols]
     return df
 
-
 def create_empty_csv(csv_path: Path):
     df = pd.DataFrame(columns=["Barcode", "Name", "Surname", "Grade", "Area", "Date Of Birth"])
     with file_guard(csv_path):
         df.to_csv(csv_path, index=False)
-
 
 def load_sheet(csv_path: Path) -> pd.DataFrame:
     if not csv_path.exists():
@@ -119,12 +125,10 @@ def load_sheet(csv_path: Path) -> pd.DataFrame:
     df = ensure_base_columns(df)
     return df
 
-
 def save_sheet(df: pd.DataFrame, csv_path: Path):
     df = df.fillna("").astype(str)
     with file_guard(csv_path):
         df.to_csv(csv_path, index=False)
-
 
 def ensure_date_column(df: pd.DataFrame, col: str) -> None:
     if col not in df.columns:
@@ -359,10 +363,6 @@ def build_birthday_message(birthdays: list[dict]) -> str:
 
 # ------------------ WHATSAPP (META CLOUD API) ------------------
 def meta_send_whatsapp_text(to_number: str, body: str) -> tuple[bool, str]:
-    """
-    Sends a WhatsApp text message via Meta WhatsApp Cloud API.
-    Requires META_WA_TOKEN, META_WA_PHONE_NUMBER_ID, META_WA_API_VERSION.
-    """
     if not META_WA_TOKEN or not META_WA_PHONE_NUMBER_ID:
         return False, "Missing META_WA_TOKEN or META_WA_PHONE_NUMBER_ID (check Streamlit secrets)."
 
@@ -386,7 +386,6 @@ def meta_send_whatsapp_text(to_number: str, body: str) -> tuple[bool, str]:
         r = requests.post(url, headers=headers, json=payload, timeout=30)
         if r.status_code in (200, 201):
             return True, "Sent successfully."
-        # Meta returns useful JSON error messages
         try:
             return False, f"Meta API error {r.status_code}: {r.json()}"
         except Exception:
@@ -486,76 +485,71 @@ def build_grades_export(df: pd.DataFrame, date_sel: str, grades: list[str], grad
 # ------------------ UI ------------------
 st.set_page_config(page_title="Tutor Class Attendance Register 2026", page_icon="✅", layout="wide")
 
-# --- CLEAN HEADER (replace your current title/logo section with this) ---
+# --- UI STYLES ---
 st.markdown("""
 <style>
-/* Reduce empty space at the top */
-main .block-container { padding-top: 1.0rem; padding-bottom: 1.5rem; }
+main .block-container { padding-top: 0.8rem; padding-bottom: 1.5rem; }
+.stTabs [data-baseweb="tab-list"] { gap: 10px; }
 
-/* Make tab bar tighter */
-.stTabs [data-baseweb="tab-list"] { gap: 8px; }
-
-/* Optional: make the warning banners less tall */
-.stAlert { padding-top: 6px; padding-bottom: 6px; }
+.section-card{
+  padding: 14px 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+  margin-bottom: 12px;
+}
+.stat-card{
+  padding: 12px 14px;
+  border: 1px solid #eef2f7;
+  border-radius: 14px;
+  background: #fbfdff;
+}
+.kpi{
+  font-size: 30px;
+  font-weight: 800;
+  line-height: 1.1;
+  margin-top: 4px;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# Header layout
-h1, h2, h3 = st.columns([1, 3, 1])
+# --- CENTERED HEADER (ONE header only) ---
+st.markdown('<div class="section-card">', unsafe_allow_html=True)
 
-with h1:
+c1, c2, c3 = st.columns([2, 3, 2])
+with c2:
     if Path("tzu_chi_logo.png").exists():
-        st.image("tzu_chi_logo.png", width=90)
-
-with h2:
-    st.markdown(
-        f"""
-        <div style="text-align:left; padding-top:4px;">
-            <div style="font-size:34px; font-weight:800; line-height:1.1;">
-                Tutor Class Attendance Register 2026
-            </div>
-            <div style="margin-top:6px; font-size:14px; color:#6b7280;">
-                Today: <b>{today_col_label()}</b> · Timezone: <b>{APP_TZ}</b>
-            </div>
-            <div style="margin-top:8px; font-size:14px; color:#374151;">
-                📌 Scan learner barcodes to mark <b>IN / OUT</b> and track participation.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-with h3:
-    st.write("")  # empty column (keeps the center nice)
-
-
-logo_col1, logo_col2, logo_col3 = st.columns([3, 2, 3])
-with logo_col2:
-    if Path("tzu_chi_logo.png").exists():
-        st.image("tzu_chi_logo.png", width=200)
-
-st.markdown("<h1 style='text-align:center; margin-bottom:-5px;'>Tutor Class Attendance Register 2026</h1>", unsafe_allow_html=True)
-st.markdown(f"<p style='text-align:center; color:#666;'>Today: <b>{today_col_label()}</b> · Timezone: <b>{APP_TZ}</b></p>", unsafe_allow_html=True)
+        st.image("tzu_chi_logo.png", width=160)
 
 st.markdown(
-    """
-    <div style="
-        margin: 0 auto 1.5rem auto;
-        max-width: 900px;
+    f"""
+    <div style="text-align:center; margin-top:6px;">
+      <div style="font-size:46px; font-weight:900; line-height:1.05;">
+        Tutor Class Attendance Register 2026
+      </div>
+      <div style="margin-top:10px; font-size:16px; color:#6b7280;">
+        Today: <b>{today_col_label()}</b> · Timezone: <b>{APP_TZ}</b>
+      </div>
+      <div style="
+        margin: 12px auto 4px auto;
+        max-width: 980px;
         padding: 10px 18px;
         border-radius: 999px;
         background: #f5f7fa;
         border: 1px solid #e4e7ec;
-        text-align: center;
-        font-size: 14px;
-        color: #555;
-    ">
-        📚 <b>Saturday Tutor Class Attendance</b> · Scan learner barcodes to mark
-        <b>IN / OUT</b> and track participation over time.
+        font-size: 15px;
+        color: #374151;
+      ">
+        📌 Scan learner barcodes to mark <b>IN / OUT</b> and track participation over time.
+      </div>
     </div>
     """,
     unsafe_allow_html=True,
 )
+
+st.markdown("</div>", unsafe_allow_html=True)
+
 
 with st.sidebar:
     st.header("Settings")
@@ -572,11 +566,18 @@ with st.sidebar:
     st.markdown("### WhatsApp Recipients")
     st.write(WHATSAPP_RECIPIENTS)
 
+    st.markdown("### Meta WhatsApp Status")
+    if META_WA_TOKEN and META_WA_PHONE_NUMBER_ID:
+        st.success("Meta WhatsApp configured ✅")
+    else:
+        st.warning("Meta WhatsApp missing token/phone ID")
+
+
 tabs = st.tabs(["📷 Scan", "📅 Today", "🏫 Grades", "📚 History", "📈 Tracking", "🛠 Manage"])
 
 
 # ------------------ AUTO-SEND (Birthdays) ------------------
-# NOTE: This only runs when the app is actually "awake" / being visited.
+# NOTE: This only runs when the app is "awake" / visited.
 try:
     df_auto = load_sheet(csv_path)
     birthdays = get_birthdays_for_week(df_auto)
@@ -871,7 +872,6 @@ with tabs[5]:
             if not name.strip() or not barcode_clean:
                 st.error("Name and Barcode are required.")
             else:
-                # prevent duplicate barcode exact match (after normalization)
                 exists = df["Barcode"].astype(str).apply(_norm).eq(_norm(barcode_clean)).any()
                 if exists:
                     st.error("This barcode already exists. Use the table to edit the existing learner.")
@@ -884,7 +884,6 @@ with tabs[5]:
                         "Area": str(area).strip(),
                         "Date Of Birth": str(dob).strip(),
                     }
-                    # ensure all date columns exist in row
                     for c in df.columns:
                         if c not in new_row:
                             new_row[c] = ""
@@ -917,7 +916,6 @@ with tabs[5]:
                 if pick == "(Select)":
                     st.error("Please select a learner.")
                 else:
-                    # extract barcode between brackets [...]
                     try:
                         b = pick.split("[", 1)[1].split("]", 1)[0]
                     except Exception:
@@ -984,4 +982,3 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
