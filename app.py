@@ -513,18 +513,23 @@ main .block-container { padding-top: 0.8rem; padding-bottom: 1.5rem; }
 }
 </style>
 """, unsafe_allow_html=True)
-
 # --- CENTERED HEADER (ONE header only) ---
+logo_path = "tzu_chi_logo.png"
+
 st.markdown('<div class="section-card">', unsafe_allow_html=True)
 
-c1, c2, c3 = st.columns([2, 3, 2])
-with c2:
-    if Path("tzu_chi_logo.png").exists():
-        st.image("tzu_chi_logo.png", width=160)
+logo_html = ""
+if Path(logo_path).exists():
+    logo_html = f"""
+    <div style="display:flex; justify-content:center; align-items:center; margin-top:6px;">
+        <img src="{logo_path}" style="width:160px; height:auto;" />
+    </div>
+    """
 
 st.markdown(
     f"""
-    <div style="text-align:center; margin-top:6px;">
+    {logo_html}
+    <div style="text-align:center; margin-top:10px;">
       <div style="font-size:46px; font-weight:900; line-height:1.05;">
         Tutor Class Attendance Register 2026
       </div>
@@ -545,10 +550,11 @@ st.markdown(
       </div>
     </div>
     """,
-    unsafe_allow_html=True,
+    unsafe_allow_html=True
 )
 
 st.markdown("</div>", unsafe_allow_html=True)
+
 
 
 with st.sidebar:
@@ -982,3 +988,4 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
