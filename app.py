@@ -259,11 +259,8 @@ def load_sheet_from_storage() -> pd.DataFrame:
             text, sha = gh_read_text(GITHUB_FILE_PATH, GITHUB_BRANCH)
             st.session_state["_gh_sha_sheet"] = sha
 
-        
         df = pd.read_csv(StringIO(text), dtype=str).fillna("")
-df.columns = [str(c).replace("\ufeff", "").strip() for c in df.columns]
-return ensure_base_columns(df)
-
+        return ensure_base_columns(df)
 
     # fallback local
     csv_path = Path(CSV_DEFAULT)
@@ -1172,6 +1169,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
 
 
 
